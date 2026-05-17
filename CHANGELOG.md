@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [v0.51.85] — 2026-05-17 — Release BI (stage-378 — 3-PR batch — workspace-prefix display leakage fix + release-tag update banner + Slice 3a cancel-control gate RFC)
+
+### Fixed
+
+- **PR #2145** by @swftwolfzyq — Prevent internal `[Workspace::v1: …]` metadata from leaking into the visible user transcript when a failed provider/retry path echoes an optimistic draft followed by the workspace prefix and the real prompt. Adds `_looks_like_current_user_turn(msg, msg_text)` to match the current human turn even when the internal tag appears mid-text — only when the text after the sentinel exactly matches the submitted prompt — and routes the merge/dedupe/display-normalization paths in `_merge_display_messages_after_agent_result` and `_find_current_user_turn` through it. Replaces `_has_new_assistant_reply` length-delta gating in `_periodic_checkpoint` with the new `_assistant_reply_added_after_current_turn` helper, which slices result messages from the current-turn position before counting assistant deltas — silent/no-response failures are now detected from the current turn alone instead of being masked by prior assistant content.
+- **PR #2146** by @swftwolfzyq — Track WebUI update checks against the latest published release tag instead of every commit on the upstream branch, so operators who only want released versions stop seeing noisy update banners for post-release development commits. Falls back to branch-based detection when no release tags are available. Splits `git describe --dirty` into a fast base describe plus a bounded dirty probe so WSL-mounted workspaces never block version detection on a slow `--dirty` walk, keeping the base version visible even if the dirty probe times out.
+
+### Documentation
+
+- **PR #2469** by @Michaelyklam (refs #1925) — Advance the runtime-adapter RFC after the Slice 2 seam shipped by marking Slice 2 complete and defining the first Slice 3a cancel-control gate. The new gate scopes Stop Generation through `RuntimeAdapter.cancel_run(...)` only, pins behavior-preserving cancellation, journal/status coherence, idempotent duplicate cancel, and explicit non-goals for approval/clarify, queue/goal, runner/sidecar, and public chat-start response changes.
+
 ## [v0.51.84] — 2026-05-17 — Release BH (stage-377 — 1-PR Docker hygiene — agent-image upgrade docs + read-only WebUI source mount + chown prune widening)
 
 ### Changed
