@@ -283,6 +283,26 @@ function expandSidebar(){
   }catch(_){}
   _syncSidebarAria();
 })();
+// ── Boot-time tab visibility ────────────────────────────────────────────────
+// Apply hidden tabs from localStorage. The primary flash-prevention is an
+// inline <script> in index.html (after sidebar-nav) that runs synchronously
+// before first paint. This IIFE is a secondary fallback: it ensures consistency
+// after panels.js is loaded and handles the active-tab switch. No-op if
+// panels.js hasn't loaded yet (typeof guard).
+(function _restoreTabVisibility(){
+  try{
+    if(typeof _applyTabVisibility==='function'&&typeof _getHiddenTabs==='function'){
+      _applyTabVisibility(_getHiddenTabs());
+    }
+    var active=document.querySelector('.rail .rail-btn.nav-tab.active[data-panel]')
+               ||document.querySelector('.sidebar-nav .nav-tab.active[data-panel]');
+    if(active&&active.classList.contains('nav-tab-hidden')){
+      var chatBtn=document.querySelector('.rail .rail-btn.nav-tab[data-panel="chat"]');
+      if(chatBtn)chatBtn.classList.add('active');
+      if(active)active.classList.remove('active');
+    }
+  }catch(_){}
+})();
 function toggleMobileFiles(){
   toggleWorkspacePanel();
 }
