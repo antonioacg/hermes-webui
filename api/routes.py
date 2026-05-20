@@ -4640,7 +4640,8 @@ def handle_post(handler, parsed) -> bool:
             project_id=body.get("project_id") or None,
             worktree_info=worktree_info,
         )
-        publish_session_list_changed("session_new")
+        if worktree_info:
+            publish_session_list_changed("session_new")
         return j(handler, {"session": s.compact() | {"messages": s.messages}})
 
     if parsed.path == "/api/session/duplicate":
@@ -8028,6 +8029,16 @@ def _prepare_chat_start_session_for_stream(
     s.save()
 
 
+def _is_hidden_empty_session(s) -> bool:
+    return (
+        getattr(s, "title", "Untitled") == "Untitled"
+        and not getattr(s, "messages", None)
+        and not getattr(s, "active_stream_id", None)
+        and not getattr(s, "pending_user_message", None)
+        and not getattr(s, "worktree_path", None)
+    )
+
+
 def _start_chat_stream_for_session(
     s,
     *,
@@ -8074,6 +8085,7 @@ def _start_chat_stream_for_session(
     diag.stage("session_lock_wait") if diag else None
     with session_lock:
         diag.stage("save_pending_state") if diag else None
+        was_hidden_empty_session = _is_hidden_empty_session(s)
         _prepare_chat_start_session_for_stream(
             s,
             msg=msg,
@@ -8083,6 +8095,8 @@ def _start_chat_stream_for_session(
             model_provider=model_provider,
             stream_id=stream_id,
         )
+    if was_hidden_empty_session:
+        publish_session_list_changed("session_new")
     diag.stage("turn_journal_submitted") if diag else None
     journal_event = {}
     try:

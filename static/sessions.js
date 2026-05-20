@@ -2138,6 +2138,7 @@ function ensureActiveSessionExternalRefreshPoll(){
 
 async function refreshSessionList(reason='manual', opts={}){
   const force = !!(opts && opts.force);
+  const refreshActive = !!(opts && opts.refreshActive);
   if(!force && typeof document !== 'undefined' && document.hidden) return;
   if(_sessionListRefreshInFlight){
     _sessionListRefreshPendingReason = reason || 'session-list';
@@ -2146,7 +2147,7 @@ async function refreshSessionList(reason='manual', opts={}){
   _sessionListRefreshInFlight = true;
   try{
     await renderSessionList({deferWhileInteracting:!force});
-    await refreshActiveSessionIfExternallyUpdated(reason||'session-list');
+    if(refreshActive) await refreshActiveSessionIfExternallyUpdated(reason||'session-list');
   }finally{
     _sessionListRefreshInFlight = false;
     const pendingReason = _sessionListRefreshPendingReason;

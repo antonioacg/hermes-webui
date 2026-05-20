@@ -38,6 +38,8 @@ def test_session_list_external_refresh_uses_sse_invalidation_not_polling():
     assert "_sessionEventsNeedsRefreshOnOpen = true" in SESSIONS_JS
     assert "void refreshSessionList('reconnect')" in SESSIONS_JS
     assert "renderSessionList({deferWhileInteracting:!force})" in SESSIONS_JS
+    assert "const refreshActive = !!(opts && opts.refreshActive)" in SESSIONS_JS
+    assert "if(refreshActive) await refreshActiveSessionIfExternallyUpdated(reason||'session-list')" in SESSIONS_JS
     assert "_sessionListRefreshPendingReason = reason || 'session-list'" in SESSIONS_JS
     assert "if(pendingReason) _scheduleSessionEventsRefresh(pendingReason)" in SESSIONS_JS
     assert "ensureSessionEventsSSE();" in SESSIONS_JS
@@ -48,8 +50,8 @@ def test_session_list_external_refresh_uses_sse_invalidation_not_polling():
 
 
 def test_pwa_pull_to_refresh_refreshes_session_list_not_page_when_available():
-    assert "window.refreshSessionList('pull', {force:true})" in UI_JS
-    assert "Promise.resolve(window.refreshSessionList('pull', {force:true})).catch(()=>{}).finally(_ptrReset)" in UI_JS
+    assert "window.refreshSessionList('pull', {force:true, refreshActive:true})" in UI_JS
+    assert "Promise.resolve(window.refreshSessionList('pull', {force:true, refreshActive:true})).catch(()=>{}).finally(_ptrReset)" in UI_JS
 
 
 def test_force_reload_clears_stale_blocking_prompts_immediately():

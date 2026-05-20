@@ -28,6 +28,9 @@ def test_session_events_publish_for_minimal_sidebar_mutations():
     ):
         assert f'publish_session_list_changed("{reason}")' in ROUTES
 
+    assert 'if worktree_info:\n            publish_session_list_changed("session_new")' in ROUTES
+    assert "was_hidden_empty_session = _is_hidden_empty_session(s)" in ROUTES
+    assert 'if was_hidden_empty_session:\n        publish_session_list_changed("session_new")' in ROUTES
     assert 'publish_session_list_changed("chat_start")' not in ROUTES
     assert 'publish_session_list_changed("cron_complete")' in ROUTES
     assert 'publish_session_list_changed("cron_complete")' in PROFILES

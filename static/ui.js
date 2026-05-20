@@ -2013,7 +2013,7 @@ if(typeof window!=='undefined') window._resetScrollDirectionTracker=_resetScroll
   el.addEventListener('touchend',function(){
     if(_ptrState===2){
       if(typeof window.refreshSessionList==='function'){
-        Promise.resolve(window.refreshSessionList('pull', {force:true})).catch(()=>{}).finally(_ptrReset);
+        Promise.resolve(window.refreshSessionList('pull', {force:true, refreshActive:true})).catch(()=>{}).finally(_ptrReset);
       }else{
         window.location.reload();
       }
