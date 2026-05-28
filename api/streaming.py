@@ -1869,13 +1869,6 @@ def _fallback_title_from_exchange(user_text: str, assistant_text: str) -> Option
     assistant_text = re.sub(r'\s+', ' ', assistant_text).strip()
     combined = f"{user_text} {assistant_text}".strip().lower()
     combined_raw = f"{user_text} {assistant_text}".strip()
-    source_lang = _detect_title_language(user_text)
-
-    if source_lang == 'de' and 'bilder' in combined and 'session' in combined:
-        if 'alt' in combined or 'alte' in combined or 'alten' in combined:
-            return 'Alte Session Bilder'
-        return 'Session Bilder'
-
     def _contains_latin(text: str) -> bool:
         return bool(re.search(r'[A-Za-z]', text or ''))
 

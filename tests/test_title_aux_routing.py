@@ -253,7 +253,7 @@ class TestGenerateTitleRawViaAuxTimeout(unittest.TestCase):
         self.assertEqual(status, 'llm_language_mismatch_aux')
         self.assertEqual(raw_preview, 'Old Session Image Display Issue')
 
-    def test_german_fallback_keeps_german_topic_words(self):
+    def test_german_fallback_uses_generic_topic_extraction_without_literal_override(self):
         from api.streaming import _fallback_title_from_exchange
 
         title = _fallback_title_from_exchange(
@@ -261,7 +261,11 @@ class TestGenerateTitleRawViaAuxTimeout(unittest.TestCase):
             'Ich prüfe die Rendering- und Attachment-Pfade im WebUI.',
         )
 
-        self.assertEqual(title, 'Alte Session Bilder')
+        self.assertIsNotNone(title)
+        self.assertIsInstance(title, str)
+        self.assertNotEqual(title, 'Alte Session Bilder')
+        self.assertNotEqual(title, 'Session Bilder')
+        self.assertIn('Warum', title)
 
     def test_configured_api_key_is_not_sent_to_caller_supplied_route(self):
         """Regression: title task keys must not leak to explicit fallback routes.
