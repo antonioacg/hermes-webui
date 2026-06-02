@@ -24,7 +24,7 @@ from api.config import (
     update_active_run,
 )
 from api.helpers import _redact_text, redact_session_data
-from api.models import get_session
+from api.models import get_session, merge_session_messages_append_only
 from api.run_journal import RunJournalWriter
 
 logger = logging.getLogger(__name__)
@@ -384,16 +384,41 @@ def _run_gateway_chat_streaming(
             assistant_msg = {"role": "assistant", "content": assistant_text, "timestamp": assistant_ts}
             previous_context = list(getattr(s, "context_messages", None) or getattr(s, "messages", None) or [])
             s.context_messages = previous_context + [user_msg, assistant_msg]
-            display = list(getattr(s, "messages", None) or [])
-            # Avoid duplicating the eager-save checkpointed user message.
-            if display:
-                latest = display[-1]
-                if isinstance(latest, dict) and latest.get("role") == "user":
-                    latest_text = " ".join(str(latest.get("content") or "").split())
-                    msg_norm = " ".join(str(msg_text or "").split())
-                    if latest_text == msg_norm:
-                        display = display[:-1]
-            s.messages = display + [user_msg, assistant_msg]
+            try:
+                from api.streaming import _is_context_compression_marker
+
+                display_context = [
+                    msg
+                    for msg in previous_context
+                    if not _is_context_compression_marker(msg)
+                ]
+            except Exception:
+                logger.debug("Failed to filter gateway display context markers", exc_info=True)
+                display_context = previous_context
+            display = merge_session_messages_append_only(
+                list(getattr(s, "messages", None) or []),
+                display_context,
+            )
+            try:
+                from api.streaming import _merge_display_messages_after_agent_result
+
+                s.messages = _merge_display_messages_after_agent_result(
+                    display,
+                    previous_context,
+                    s.context_messages,
+                    str(msg_text or ""),
+                )
+            except Exception:
+                logger.debug("Failed to merge gateway display transcript", exc_info=True)
+                # Avoid duplicating the eager-save checkpointed user message.
+                if display:
+                    latest = display[-1]
+                    if isinstance(latest, dict) and latest.get("role") == "user":
+                        latest_text = " ".join(str(latest.get("content") or "").split())
+                        msg_norm = " ".join(str(msg_text or "").split())
+                        if latest_text == msg_norm:
+                            display = display[:-1]
+                s.messages = display + [user_msg, assistant_msg]
             s.active_stream_id = None
             s.pending_user_message = None
             s.pending_attachments = None
