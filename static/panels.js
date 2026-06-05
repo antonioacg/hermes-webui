@@ -6282,7 +6282,10 @@ async function loadSettingsPanel(){
         }
       }
       langSel.value=resolvedLanguage;
-      langSel.addEventListener('change',_schedulePreferencesAutosave,{once:false});
+      langSel.addEventListener('change',function(){
+        if(typeof setLocale==='function'){setLocale(this.value);if(typeof applyLocaleToDOM==='function')applyLocaleToDOM();}
+        _schedulePreferencesAutosave();
+      },{once:false});
     }
     const showUsageCb=$('settingsShowTokenUsage');
     if(showUsageCb){showUsageCb.checked=!!settings.show_token_usage;showUsageCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});}

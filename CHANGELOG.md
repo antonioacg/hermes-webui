@@ -3,6 +3,15 @@
 
 ## [Unreleased]
 
+## [v0.51.262] — 2026-06-04 — Release ID (stage-r12 — zh localization + Docker reveal-path + recall-prefill role fix)
+
+### Fixed
+- **WebUI no longer sends adjacent `user` roles to strict chat templates when recall prefill is configured.** A configured recall prefill could end with `role:user`, and both in-process streaming and Gateway chat then appended the live browser user turn — producing consecutive `user` messages that strict templates (Mistral/Gemma/Jinja) reject. A new `_normalize_prefill_messages_before_user_turn()` drops a terminal `user` prefill turn at that boundary (in both `api/streaming.py` and `api/gateway_chat.py`), preserving safe assistant prefill context. (#3432, @franksong2702)
+- **"Reveal in file manager" now works for Docker deployments** where the workspace is a host directory mounted into the container — container paths (e.g. `/workspace`) are translated back to the host path so the reveal resolves on the host. (#2558, @rodboev)
+
+### Changed
+- **Completed the Chinese (Simplified) localization** — translated the remaining untranslated `zh` strings (MCP server controls, tool-list pagination/summary) to Chinese, preserving all interpolation placeholders. (@Lyr-GW)
+
 ## [v0.51.261] — 2026-06-04 — Release IC (stage-r11 — live Todos panel via a todo_state SSE contract)
 
 ### Fixed

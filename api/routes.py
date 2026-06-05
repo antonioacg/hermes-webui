@@ -12262,14 +12262,28 @@ def _handle_file_reveal(handler, body):
             # what was missing).
             return bad(handler, f"File not found: {target}", 404)
 
+        target_str = str(target)
+
+        # Optional Docker host/container path translation (mirrors _handle_file_open_vscode).
+        from api.config import get_config as _get_cfg  # noqa: PLC0415
+        vscode_cfg = _get_cfg().get("vscode", {})
+        if not isinstance(vscode_cfg, dict):
+            vscode_cfg = {}
+        container_prefix = vscode_cfg.get("container_path_prefix", "")
+        host_prefix = vscode_cfg.get("host_path_prefix", "")
+        if container_prefix and host_prefix:
+            _norm = container_prefix.rstrip('/') + '/'
+            if target_str.startswith(_norm) or target_str == container_prefix.rstrip('/'):
+                target_str = host_prefix + target_str[len(container_prefix):]
+
         system = platform.system()
         if system == "Darwin":
-            subprocess.Popen(["open", "-R", str(target)])
+            subprocess.Popen(["open", "-R", target_str])
         elif system == "Windows":
-            subprocess.Popen(["explorer.exe", "/select," + str(target)])
+            subprocess.Popen(["explorer.exe", "/select," + target_str])
         else:
             # Linux / other — open parent directory
-            subprocess.Popen(["xdg-open", str(target.parent)])
+            subprocess.Popen(["xdg-open", str(Path(target_str).parent)])
 
         return j(handler, {"ok": True, "path": body["path"]})
     except (ValueError, PermissionError, OSError) as e:
@@ -12342,8 +12356,10 @@ def _handle_file_open_vscode(handler, body):
             vscode_cfg = {}
         container_prefix = vscode_cfg.get("container_path_prefix", "")
         host_prefix = vscode_cfg.get("host_path_prefix", "")
-        if container_prefix and host_prefix and target_str.startswith(container_prefix):
-            target_str = host_prefix + target_str[len(container_prefix):]
+        if container_prefix and host_prefix:
+            _norm = container_prefix.rstrip('/') + '/'
+            if target_str.startswith(_norm) or target_str == container_prefix.rstrip('/'):
+                target_str = host_prefix + target_str[len(container_prefix):]
 
         cmd = vscode_cfg.get("command", "code")
         # Resolve the command to an absolute path so subprocess.Popen finds it
