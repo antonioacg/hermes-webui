@@ -7,6 +7,12 @@
 
 - **New RFC: Stable Assistant Turn Anchors for Live-to-Final rendering.** Defines a frontend presentation/reconciliation model for anchoring one assistant turn across live streaming, settlement, replay/reload/recovery, Compact Worklog, Transparent Stream, terminal states, artifacts, and side effects. (#3926)
 
+## [v0.51.354] — 2026-06-10 — Release LR (preserve explicit @provider:model picks across cold catalogs)
+
+### Fixed
+
+- **An explicit `@provider:model` pick no longer snaps back to the default model when the provider's group is briefly missing from the cached catalog.** Providers that discover their models live (ollama-cloud, deepseek, xai) can momentarily lack their group in the cached catalog snapshot used on hot `GET /api/session` and chat-switch paths; a selection like `@ollama-cloud:minimax-m3` was being silently reverted to the global default on the 2nd-and-later turn. The resolver now preserves the explicit selection when the provider is known or configured (decided from the static registry + config, not the cold catalog), while a genuinely-unknown provider still falls back to the default instead of routing to an unrecognized one. The cached-catalog performance path is unchanged. (#3950)
+
 ## [v0.51.353] — 2026-06-10 — Release LQ (cross-client live-turn recovery)
 
 ### Fixed
