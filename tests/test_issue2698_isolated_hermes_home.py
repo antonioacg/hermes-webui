@@ -291,6 +291,19 @@ class TestIsolatedRuntimePinning:
         assert get_hermes_home_for_profile("default") == isolated_default
         assert get_hermes_home_for_profile("default") != temp_hermes_home
 
+    def test_explicit_foreign_profile_resolution_stays_on_isolated_home(self, temp_single_profile, monkeypatch):
+        """Explicit profile lookups must not escape the isolated startup home."""
+        from api.profiles import get_hermes_home_for_profile, _resolve_profile_home_for_name
+
+        base_home = temp_single_profile.parent.parent
+        monkeypatch.setenv("HERMES_HOME", str(temp_single_profile))
+        monkeypatch.setenv("HERMES_BASE_HOME", "")
+        monkeypatch.setattr(_profiles_mod, "_DEFAULT_HERMES_HOME", base_home)
+        monkeypatch.setattr(_profiles_mod, "_INITIAL_HERMES_HOME", str(temp_single_profile))
+
+        assert _resolve_profile_home_for_name("other_profile") == temp_single_profile
+        assert get_hermes_home_for_profile("other_profile") == temp_single_profile
+
     def test_list_profiles_prefers_matching_isolated_default_home(self, temp_hermes_home, monkeypatch):
         """The isolated profiles/default row must not collapse to the base-home row."""
         isolated_default = temp_hermes_home / "profiles" / "default"

@@ -376,10 +376,17 @@ def _resolve_profile_home_for_name(name: str) -> Path:
     names fall back to the base home so traversal-shaped cookie values cannot
     influence filesystem paths.
     """
-    # In isolated mode, the pinned profile name, including a literal
-    # "default", must resolve to the configured startup HERMES_HOME.
-    if _is_isolated_profile_mode() and name == _isolated_profile_name():
-        return Path(_INITIAL_HERMES_HOME).expanduser()
+    # In isolated mode, every logical profile lookup clamps to the configured
+    # startup HERMES_HOME so callers cannot resolve a foreign profile path.
+    if _is_isolated_profile_mode():
+        isolated_name = _isolated_profile_name()
+        isolated_home = Path(_INITIAL_HERMES_HOME).expanduser()
+        if name and not _profiles_match(name, isolated_name):
+            logger.warning(
+                "Ignoring profile lookup %r in isolated profile mode; using pinned profile %r",
+                name, isolated_name,
+            )
+        return isolated_home
     if not name or _is_root_profile(name):
         return _DEFAULT_HERMES_HOME
     if not _PROFILE_ID_RE.fullmatch(name):
