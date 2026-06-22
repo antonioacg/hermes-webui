@@ -274,7 +274,7 @@ def test_static_sources_cover_closed_app_push_flow():
     assert "/api/push/subscribe" in MESSAGES_JS
     assert "method:'DELETE'" in MESSAGES_JS
     assert "_notify_response_complete_web_push(session_id, _answer)" in STREAMING_SRC
-    assert STREAMING_SRC.count("_notify_response_complete_web_push(session_id, _answer)") >= 2
+    assert STREAMING_SRC.count("_notify_response_complete_web_push(session_id, _answer)") == 1
     assert "notify_approval_required(session_key, head)" in ROUTE_APPROVALS_SRC
     assert "notify_clarify_required(session_key, entry.data)" in CLARIFY_SRC
     assert "pywebpush>=2.0" in REQUIREMENTS

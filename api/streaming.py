@@ -7754,7 +7754,7 @@ def _run_agent_streaming(
                     'ephemeral': True,
                     'answer': _answer,
                 })
-                _notify_response_complete_web_push(session_id, _answer)
+                # /btw sessions are intentionally silent and should not trigger closed-app push.
                 if _checkpoint_stop is not None:
                     _checkpoint_stop.set()
                 try:
