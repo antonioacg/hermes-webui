@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -193,6 +194,75 @@ def test_push_status_reports_unavailable_when_pywebpush_missing(monkeypatch):
         web_push._notification_payload("Response complete", "Task finished", session_id="session-123")
     )
     assert sent == 0
+
+
+def test_subscription_store_save_uses_atomic_replace(monkeypatch, tmp_path):
+    import api.web_push as web_push
+
+    store_path = tmp_path / "webui_push_subscriptions.json"
+    replace_calls = []
+    mkstemp_calls = []
+    real_mkstemp = web_push.tempfile.mkstemp
+    real_replace = web_push.os.replace
+
+    monkeypatch.setattr(web_push, "_subscription_store_path", lambda: store_path)
+
+    def _mkstemp(*args, **kwargs):
+        mkstemp_calls.append({
+            "dir": kwargs.get("dir"),
+            "suffix": kwargs.get("suffix"),
+        })
+        return real_mkstemp(*args, **kwargs)
+
+    def _replace(src, dst):
+        replace_calls.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(web_push.tempfile, "mkstemp", _mkstemp)
+    monkeypatch.setattr(web_push.os, "replace", _replace)
+
+    web_push._save_store({"subscriptions": [_subscription("https://push.example/live")]})
+
+    assert mkstemp_calls == [{"dir": store_path.parent, "suffix": ".web_push.tmp"}]
+    assert replace_calls and replace_calls[0][1] == store_path
+    assert replace_calls[0][0] != store_path
+
+
+def test_subscription_store_mutations_hold_lock_across_read_modify_write(monkeypatch, tmp_path):
+    import api.web_push as web_push
+
+    store_path = tmp_path / "webui_push_subscriptions.json"
+    entered_save = threading.Event()
+    release_save = threading.Event()
+    removal_done = threading.Event()
+    real_save_store = web_push._save_store
+
+    monkeypatch.setattr(web_push, "_subscription_store_path", lambda: store_path)
+
+    def _slow_save(store: dict) -> None:
+        entered_save.set()
+        release_save.wait(timeout=5)
+        real_save_store(store)
+
+    web_push._save_store({"subscriptions": [_subscription("https://push.example/dead")]})
+    monkeypatch.setattr(web_push, "_save_store", _slow_save)
+
+    upsert_thread = threading.Thread(
+        target=lambda: web_push.upsert_subscription(_subscription("https://push.example/live"))
+    )
+    remove_thread = threading.Thread(
+        target=lambda: (web_push.remove_subscription("https://push.example/dead"), removal_done.set())
+    )
+
+    upsert_thread.start()
+    assert entered_save.wait(timeout=1), "upsert_subscription never reached the locked save path"
+    remove_thread.start()
+    assert not removal_done.wait(timeout=0.2), "remove_subscription should block behind the store lock"
+    release_save.set()
+    upsert_thread.join(timeout=5)
+    remove_thread.join(timeout=5)
+
+    assert sorted(sub["endpoint"] for sub in web_push.list_subscriptions()) == ["https://push.example/live"]
 
 
 def test_bg_task_complete_producer_fans_out_web_push(monkeypatch):

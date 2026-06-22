@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
 
 logger = logging.getLogger(__name__)
 _PUSH_STORE_NAME = "webui_push_subscriptions.json"
+_STORE_LOCK = threading.Lock()
 
 
 def _subscription_store_path() -> Path:
@@ -38,7 +42,18 @@ def _load_store() -> dict:
 def _save_store(store: dict) -> None:
     path = _subscription_store_path()
     payload = json.dumps(store, ensure_ascii=False, indent=2, sort_keys=True)
-    path.write_text(payload + "\n", encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".web_push.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload + "\n")
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _normalize_subscription(subscription: dict) -> dict:
@@ -66,27 +81,42 @@ def list_subscriptions() -> list[dict]:
     return list(_load_store()["subscriptions"])
 
 
+def _mutate_store(mutator) -> tuple[object, bool]:
+    with _STORE_LOCK:
+        store = _load_store()
+        result, changed = mutator(store)
+        if changed:
+            _save_store(store)
+        return result, changed
+
+
 def upsert_subscription(subscription: dict) -> dict:
     normalized = _normalize_subscription(subscription)
-    store = _load_store()
-    subs = [sub for sub in store["subscriptions"] if sub.get("endpoint") != normalized["endpoint"]]
-    subs.append(normalized)
-    store["subscriptions"] = subs
-    _save_store(store)
-    return normalized
+
+    def _apply(store: dict) -> tuple[dict, bool]:
+        subs = [sub for sub in store["subscriptions"] if sub.get("endpoint") != normalized["endpoint"]]
+        subs.append(normalized)
+        changed = subs != store["subscriptions"]
+        store["subscriptions"] = subs
+        return normalized, changed
+
+    result, _ = _mutate_store(_apply)
+    return result
 
 
 def remove_subscription(endpoint: str) -> bool:
     endpoint = str(endpoint or "").strip()
     if not endpoint:
         return False
-    store = _load_store()
-    before = len(store["subscriptions"])
-    store["subscriptions"] = [sub for sub in store["subscriptions"] if sub.get("endpoint") != endpoint]
-    changed = len(store["subscriptions"]) != before
-    if changed:
-        _save_store(store)
-    return changed
+
+    def _apply(store: dict) -> tuple[bool, bool]:
+        before = len(store["subscriptions"])
+        store["subscriptions"] = [sub for sub in store["subscriptions"] if sub.get("endpoint") != endpoint]
+        changed = len(store["subscriptions"]) != before
+        return changed, changed
+
+    result, _ = _mutate_store(_apply)
+    return result
 
 
 def _get_pywebpush_impl():
@@ -137,7 +167,7 @@ def send_web_push(payload: dict) -> int:
     subscriptions = list_subscriptions()
     if not subscriptions:
         return 0
-    webpush_fn, webpush_exc = _get_pywebpush_impl()
+    webpush_fn, _ = _get_pywebpush_impl()
     if not webpush_fn:
         return 0
     sent = 0
@@ -159,8 +189,6 @@ def send_web_push(payload: dict) -> int:
             if status_code in (404, 410):
                 stale_endpoints.append(str(subscription.get("endpoint") or ""))
             logger.debug("Web Push send failed for %s", subscription.get("endpoint"), exc_info=True)
-            if webpush_exc and isinstance(exc, webpush_exc):
-                continue
     for endpoint in stale_endpoints:
         remove_subscription(endpoint)
     return sent
