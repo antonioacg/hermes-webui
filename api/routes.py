@@ -1597,6 +1597,8 @@ def _session_list_cache_key(
     show_previous_messaging_sessions: bool,
     show_cron_sessions: bool,
     include_archived: bool = False,
+    exclude_hidden: bool = False,
+    visible_only: bool = False,
     source_filter: str | None = None,
     sidebar_source: str | None = None,
 ) -> tuple:
@@ -1607,6 +1609,8 @@ def _session_list_cache_key(
         bool(show_previous_messaging_sessions),
         bool(show_cron_sessions),
         bool(include_archived),
+        bool(exclude_hidden),
+        bool(visible_only),
         source_filter,
         sidebar_source,
     )
@@ -1926,11 +1930,36 @@ def _build_session_list_cache_payload(
     show_previous_messaging_sessions: bool,
     show_cron_sessions: bool,
     include_archived: bool = False,
+    exclude_hidden: bool = False,
+    visible_only: bool = False,
     source_filter: str | None = None,
     sidebar_source: str | None = None,
     diag=None,
 ) -> dict:
     diag_stage = diag.stage if diag is not None else lambda *_a, **_k: None
+
+    def _session_has_server_visible_messages(session: dict) -> bool:
+        """Return True when a non-active sidebar row has a visibility signal.
+
+        Keep this mirror of the non-active server filter narrow and local to
+        route behavior so model-layer behavior remains unchanged.
+        """
+        if not isinstance(session, dict):
+            return False
+        if _numeric_count(session.get("message_count")) > 0:
+            return True
+
+        attention = session.get("attention")
+        if isinstance(attention, dict) and attention.get("kind"):
+            if _numeric_count(attention.get("count")) > 0:
+                return True
+
+        return bool(
+            session.get("is_streaming")
+            or session.get("active_stream_id")
+            or session.get("pending_user_message")
+            or session.get("has_pending_user_message")
+        )
 
     def _all_sessions_for_sidebar():
         try:
@@ -2090,6 +2119,16 @@ def _build_session_list_cache_payload(
         diag_stage("cli_cap")
         archived_scoped = _cap_recent_cli_sessions(archived_scoped, cli_cap=CLI_VISIBLE_SESSION_CAP)
         visible_scoped = _cap_recent_cli_sessions(visible_scoped, cli_cap=CLI_VISIBLE_SESSION_CAP)
+    if visible_only:
+        archived_scoped = [
+            s for s in archived_scoped if _session_has_server_visible_messages(s)
+        ]
+        visible_scoped = [
+            s for s in visible_scoped if _session_has_server_visible_messages(s)
+        ]
+    if exclude_hidden:
+        archived_scoped = [s for s in archived_scoped if not s.get("default_hidden")]
+        visible_scoped = [s for s in visible_scoped if not s.get("default_hidden")]
     archived_webui_count = sum(
         1 for s in archived_scoped
         if s.get("archived") and not _is_cli_session_for_settings(s)
@@ -9794,6 +9833,7 @@ def handle_get(handler, parsed) -> bool:
             active_profile = get_active_profile_name()
             all_profiles = _all_profiles_enabled(parsed)
             include_archived = _query_flag(parsed, "include_archived")
+            exclude_hidden = _query_flag(parsed, "exclude_hidden")
             sidebar_source = parse_qs(parsed.query).get("sidebar_source", [""])[0].strip().lower() or None
             if sidebar_source not in ("webui", "cli"):
                 sidebar_source = None
@@ -9804,6 +9844,8 @@ def handle_get(handler, parsed) -> bool:
                 show_previous_messaging_sessions=show_previous_messaging_sessions,
                 show_cron_sessions=show_cron_sessions,
                 include_archived=include_archived,
+                exclude_hidden=exclude_hidden,
+                visible_only=True,
                 source_filter=agent_session_source_filter,
                 sidebar_source=sidebar_source,
             )
@@ -9820,6 +9862,8 @@ def handle_get(handler, parsed) -> bool:
                     show_previous_messaging_sessions=show_previous_messaging_sessions,
                     show_cron_sessions=show_cron_sessions,
                     include_archived=include_archived,
+                    exclude_hidden=exclude_hidden,
+                    visible_only=True,
                     source_filter=agent_session_source_filter,
                     sidebar_source=sidebar_source,
                     diag=diag,

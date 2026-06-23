@@ -1640,6 +1640,7 @@ function _requestedSessionSidebarSource() {
 function _sessionListQueryString() {
   const qs = new URLSearchParams();
   qs.set('sidebar_source', _requestedSessionSidebarSource());
+  if(_activeProject===null || _activeProject===NO_PROJECT_FILTER) qs.set('exclude_hidden','1');
   if(_showAllProfiles) qs.set('all_profiles','1');
   if(_showArchived) qs.set('include_archived','1');
   return `?${qs.toString()}`;

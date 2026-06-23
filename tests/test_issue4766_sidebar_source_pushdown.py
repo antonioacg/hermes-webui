@@ -253,6 +253,7 @@ def test_session_list_query_string_respects_sidebar_source_and_flags():
     query_fn = _extract_function(src, "_sessionListQueryString")
     script = f"""
 global.window = {{ _showCliSessions: true }};
+global._activeProject = null;
 global._sessionSourceFilter = 'cli';
 global._showAllProfiles = true;
 global._showArchived = false;
@@ -262,12 +263,18 @@ const first = _sessionListQueryString();
 window._showCliSessions = false;
 global._showArchived = true;
 const second = _sessionListQueryString();
-console.log(JSON.stringify({{ first, second }}));
+global._activeProject = '__none__';
+global.NO_PROJECT_FILTER = '__none__';
+global._showAllProfiles = false;
+global._showArchived = false;
+const third = _sessionListQueryString();
+console.log(JSON.stringify({{ first, second, third }}));
 """
     body = _run_node(script)
 
-    assert body["first"] == "?sidebar_source=cli&all_profiles=1"
-    assert body["second"] == "?sidebar_source=webui&all_profiles=1&include_archived=1"
+    assert body["first"] == "?sidebar_source=cli&exclude_hidden=1&all_profiles=1"
+    assert body["second"] == "?sidebar_source=webui&exclude_hidden=1&all_profiles=1&include_archived=1"
+    assert body["third"] == "?sidebar_source=webui&exclude_hidden=1"
 
 
 @pytest.mark.skipif(NODE is None, reason="node not on PATH")
