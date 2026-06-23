@@ -14685,11 +14685,14 @@ function _renderTreeItems(container, entries, depth){
     // Tooltip only on FILES — dblclick renames them. On directories, dblclick
     // navigates into the folder; rename lives in the right-click context menu
     // (the "Double-click to rename" hint here would be misleading). #1710.
+    const nameIsReadOnlyEscape=typeof isReadOnlyEscape!=='undefined'
+      ? isReadOnlyEscape
+      : (typeof _workspaceEscapeGrantForPath==='function' ? !!_workspaceEscapeGrantForPath(item.path) : false);
     if(isLk && item.target)
       nameEl.title = t('symlink_link_to').replace('{target}', () => elideMiddle(item.target));
     else if(isExternalLink)
-      nameEl.title = isReadOnlyEscape ? t('external_link_read_only') : t('external_link_open_confirm');
-    else if(isReadOnlyEscape)
+      nameEl.title = nameIsReadOnlyEscape ? t('external_link_read_only') : t('external_link_open_confirm');
+    else if(nameIsReadOnlyEscape)
       nameEl.title = t('external_link_read_only');
     else if(!isDirLike)
       nameEl.title = t('double_click_rename');
@@ -14713,7 +14716,7 @@ function _renderTreeItems(container, entries, depth){
       // For directories, double-click navigates (breadcrumb view)
       if(isDirLike){loadDir(item.path);return;}
       // Escape-root rows remain browse-only, nested escape rows stay display-only.
-      if(isReadOnlyEscape){
+      if(nameIsReadOnlyEscape){
         if(isExternalLink){if(typeof el.onclick==='function')el.onclick(e);return;}
         openFile(item.path);
         return;
@@ -14771,11 +14774,13 @@ function _renderTreeItems(container, entries, depth){
     }
 
     // Delete button -- for file-like rows and directory-like rows
-    if(isFileLike&& !isReadOnlyEscape){
-      const del=document.createElement('button');
-      del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
-      del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceFile(item.path,item.name);};
-      el.appendChild(del);
+    if(isFileLike){
+      if(!isReadOnlyEscape){
+        const del=document.createElement('button');
+        del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';
+        del.onclick=async(e)=>{e.stopPropagation();await deleteWorkspaceFile(item.path,item.name);};
+        el.appendChild(del);
+      }
     }else if(isDirLike&& !isReadOnlyEscape){
       const del=document.createElement('button');
       del.className='file-del-btn';del.title=t('delete_title');del.textContent='\u00d7';

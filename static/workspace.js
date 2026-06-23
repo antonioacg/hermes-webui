@@ -659,7 +659,10 @@ async function loadDir(path, opts={}){
       _restoreExpandedDirs();  // restore per-workspace expanded state after root and refresh resets
     }
     S.currentDir=path||'.';
-    const data=await api(_workspaceRouteForPath(path, 'list'));
+    const data=await api(
+      _workspaceRouteForPath(path, 'list') ||
+      `/api/list?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path||'.')}`
+    );
     if(!S.session||S.session.session_id!==sessionId||treeGen!==_wsTreeGen)return;
     S.entries=data.entries||[];renderBreadcrumb();renderFileTree();
     // #2673 — refresh Artifacts tab when its source data (the file tree) updates.

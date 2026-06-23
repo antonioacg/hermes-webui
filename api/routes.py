@@ -13040,7 +13040,7 @@ def _handle_escape_file_raw(handler, parsed):
     force_download = qs.get("download", [""])[0] == "1"
     try:
         anchor_root, target = raw_authorized_escape_target(Path(s.workspace), sid, token, rel)
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         return j(handler, {"error": "not found"}, status=404)
     except ValueError as exc:
         msg = _sanitize_error(exc)
