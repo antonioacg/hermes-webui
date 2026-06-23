@@ -5534,7 +5534,12 @@ function renderSessionListFromCache(){
   const committedSwipeReflowDelay=Math.max(0,committedSwipeDuration-SESSION_SWIPE_REFLOW_LEAD_MS);
   const listScrollTopBeforeRender=list.scrollTop||0;
   list.innerHTML='';
-  // A real render has arrived — the skeleton (if any) is now replaced. (#4662)
+  // #4671: belt-and-suspenders. The authoritative skeleton-clear happens in
+  // _applySessionListPayload (once fresh data is in hand) BEFORE this function is
+  // reached, and the guard at the top of renderSessionListFromCache bails while the
+  // flag is still true — so by the time we paint here the flag is already false. Keep
+  // this assignment as a defensive backstop for any future non-switch caller that
+  // reaches a real paint with the flag somehow still set.
   _sessionListSkeletonActive=false;
   // Batch select bar (when in select mode)
   if(_sessionSelectMode){

@@ -5897,6 +5897,25 @@ window.addEventListener('resize',()=>{
 });
 
 async function switchToProfile(name) {
+  // ── #4671 profile-switch loading-skeleton — FOUR-GUARD CONTRACT ───────────────
+  // The skeleton must never be clobbered by the OLD profile's content and must never
+  // strand. Four interacting pieces of state cooperate; an edit touching one without
+  // the others can silently reopen a clobber/strand window, so keep them in sync:
+  //   1. _profileSwitchListEmbargo (sessions.js) — set BEFORE the skeleton, drops EVERY
+  //      session-list payload (success + fetch-failure) during the switch window; lifted
+  //      immediately before the switch-owned renderSessionList(), on failure-restore, and
+  //      in the _switchGen-guarded finally. Closes the "render that STARTS mid-switch,
+  //      before the new-profile cookie is set, fetched the old profile" window.
+  //   2. _invalidateSessionListRenders() (sessions.js) — bumps _renderSessionListGen +
+  //      clears pending/queued at switch start; discards renders already in flight/queued.
+  //   3. _sessionListSkeletonActive (sessions.js) — renderSessionListFromCache() bails
+  //      while true; cleared ONLY on fresh data (_applySessionListPayload), fetch-error,
+  //      and failure-restore — so a bail can't strand the skeleton.
+  //   4. _wsTreeGen (workspace.js) — bumped UNCONDITIONALLY here (incl. panel-closed, since
+  //      loadDir('.') still runs); loadDir rejects stale /api/list whose gen is superseded.
+  //   Plus _profileSwitchGeneration / _switchGen — guards superseded switches so a slower
+  //   earlier switch can't clobber a newer one's skeleton/embargo.
+  // ──────────────────────────────────────────────────────────────────────────────
   // No-op self-switch guard: bail before showing any loading skeleton if we're
   // already on this profile, so paths like activateCurrentProfile() (which
   // doesn't pre-check) can't flash a skeleton→restore for a click that changes
