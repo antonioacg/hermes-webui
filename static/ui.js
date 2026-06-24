@@ -12908,7 +12908,8 @@ function _toolResultOneLiner(preview){
   const first=preview.split('\n').find(l=>l.trim())||'';
   const trimmed=first.trim();
   if(!trimmed) return '';
-  if(trimmed[0]==='{'||trimmed[0]==='[') return '';
+  if(trimmed[0]==='{') return '';
+  if(trimmed[0]==='['){try{JSON.parse(trimmed);return '';}catch(e){/* not JSON */}}
   return trimmed.length>180?trimmed.slice(0,177)+'…':trimmed;
 }
 function _toolCardPreviewText(tc, displaySnippet){

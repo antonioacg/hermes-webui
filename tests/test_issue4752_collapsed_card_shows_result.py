@@ -99,6 +99,9 @@ class TestToolResultOneLiner:
     def test_json_array_suppressed(self):
         assert _result_one_liner('[1,2,3]') == ""
 
+    def test_bracket_prefixed_non_json_shown(self):
+        assert _result_one_liner('[INFO] 3 files created') == "[INFO] 3 files created"
+
     def test_multiline_collapses_to_first_nonempty_line(self):
         assert _result_one_liner("Line 1\nLine 2\nLine 3") == "Line 1"
 
