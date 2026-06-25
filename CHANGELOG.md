@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.650] — 2026-06-25 — Release XF (table cells with a pipe inside inline code render correctly)
+
+### Fixed
+
+- **Markdown tables no longer break when a cell contains a `|` inside inline code.** A table cell like `` `updates.model = modelState.model || null` `` rendered the `|` (or `||`) as extra column separators, splitting one cell into several and corrupting the row. The table parser already protected pipes inside bracket pairs; it now also protects pipes inside inline-code (`<code>…</code>`) spans — which is what backtick spans become before the table pass runs — so the code renders intact in a single cell. Thanks @luandnh. (#4896)
+
 ## [v0.51.649] — 2026-06-25 — Release XE (gallery-installed extensions actually activate)
 
 ### Fixed
