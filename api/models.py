@@ -262,7 +262,10 @@ def _write_session_index(updates=None, *, session_dir: Path | None = None, sessi
 
     LOCK protects only in-memory session snapshots.  JSON parsing, payload
     construction, and disk I/O run outside LOCK so active-stream saves do not
-    block ordinary session reads longer than necessary.
+    block ordinary session reads longer than necessary.  The on-disk index
+    read-modify-write is NOT unsynchronized: it stays fully serialized by
+    ``_INDEX_WRITE_LOCK`` (held across this whole function), so narrowing LOCK
+    cannot introduce a lost-update or index-corruption race between writers.
     """
     session_dir = session_dir or SESSION_DIR
     session_index_file = session_index_file or SESSION_INDEX_FILE
