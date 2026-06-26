@@ -1,7 +1,7 @@
 """
 Hermes Web UI -- optional authentication.
 Off by default. Enable by setting HERMES_WEBUI_PASSWORD, configuring a
-password in Settings, or registering passkeys and then going passwordless.
+password in Settings, registering passkeys, or configuring native OIDC SSO.
 """
 import hashlib
 import hmac
@@ -51,6 +51,7 @@ def _resolve_session_ttl() -> int:
 PUBLIC_PATHS = frozenset({
     '/login', '/health', '/favicon.ico', '/sw.js',
     '/api/auth/login', '/api/auth/status',
+    '/api/auth/oidc/start', '/api/auth/oidc/callback',
     '/api/auth/passkey/options', '/api/auth/passkey/login',
     '/manifest.json', '/manifest.webmanifest',
     '/session/manifest.json', '/session/manifest.webmanifest',
@@ -443,9 +444,24 @@ def are_passkeys_enabled() -> bool:
         return False
 
 
+def is_oidc_auth_enabled() -> bool:
+    """True if native OIDC login is configured for WebUI sessions."""
+    try:
+        from api.auth_oidc import is_oidc_enabled
+
+        return is_oidc_enabled()
+    except Exception as exc:
+        logger.debug("Failed to inspect OIDC availability: %s", exc)
+        return False
+
+
 def is_auth_enabled() -> bool:
-    """True if password auth or passkey-only auth is configured."""
-    return is_password_auth_enabled() or are_passkeys_enabled()
+    """True if password auth, passkeys, or OIDC login is configured."""
+    return (
+        is_password_auth_enabled()
+        or are_passkeys_enabled()
+        or is_oidc_auth_enabled()
+    )
 
 
 def verify_password(plain: str) -> bool:
