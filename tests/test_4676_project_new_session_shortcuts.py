@@ -48,6 +48,8 @@ def test_quick_create_button_attaches_filter_align_and_request_path():
     assert "project-chip-quick-create" in helper
     assert "_setActiveProjectFilter(project.project_id)" in helper
     assert "newSession(false,{project_id:project.project_id})" in helper
+    assert "if(_newSessionInFlight)" in helper
+    assert "_setActiveProjectFilter(previousProject)" in helper
     assert "btn.ondblclick" in helper
     assert "btn.oncontextmenu" in helper
     assert "btn.ontouchstart" in helper
@@ -238,13 +240,27 @@ globalThis.document = {
   },
 };
 globalThis._setActiveProjectFilter = (projectId) => {
+  globalThis._activeProject = projectId;
   params.filterProjectId = projectId;
   params.calls.push({type: 'set-filter', projectId});
 };
+globalThis._activeProject = params.activeProject;
 globalThis.newSession = async (flash, options) => {
+  if (globalThis._newSessionInFlight) {
+    params.toasts.push('New conversation already in progress');
+    return globalThis._newSessionInFlight;
+  }
+  if (params.failNewSession) throw new Error(params.failMessage || 'request failed');
   params.newSession = {flash, options};
   params.calls.push({type: 'new-session', flash, options});
+  return params.newSessionResult || { session_id: 's-1' };
 };
+globalThis.showToast = (message) => {
+  params.toasts.push(String(message || ''));
+};
+globalThis._newSessionInFlight = params.newSessionInFlight
+  ? Promise.resolve(params.newSessionInFlight)
+  : null;
 
 eval(extractFunction(sessionsSrc, '_attachProjectQuickCreateButton'));
 
@@ -264,31 +280,45 @@ const touchEv = {
   preventDefault() { params.touchPreventCount++; },
   stopImmediatePropagation() { params.touchStopImmediateCount++; },
 };
-btn.onclick(ev);
-btn.ondblclick(ev);
-btn.oncontextmenu(ev);
-btn.ontouchstart(touchEv);
-btn.ontouchend(touchEv);
-console.log(JSON.stringify({
-  buttonClass: btn.className,
-  buttonTag: btn.tagName,
-  buttonText: btn.textContent,
-  newSession: params.newSession,
-  filterProjectId: params.filterProjectId,
-  stopCount: params.stopCount,
-  preventCount: params.preventCount,
-  stopImmediateCount: params.stopImmediateCount,
-  touchStopCount: params.touchStopCount,
-  touchPreventCount: params.touchPreventCount,
-  touchStopImmediateCount: params.touchStopImmediateCount,
-  calls: params.calls,
-}));
+(async () => {
+  await btn.onclick(ev);
+  btn.ondblclick(ev);
+  btn.oncontextmenu(ev);
+  btn.ontouchstart(touchEv);
+  btn.ontouchend(touchEv);
+  console.log(JSON.stringify({
+    buttonClass: btn.className,
+    buttonTag: btn.tagName,
+    buttonText: btn.textContent,
+    newSession: params.newSession,
+    filterProjectId: params.filterProjectId,
+    stopCount: params.stopCount,
+    preventCount: params.preventCount,
+    stopImmediateCount: params.stopImmediateCount,
+    touchStopCount: params.touchStopCount,
+    touchPreventCount: params.touchPreventCount,
+    touchStopImmediateCount: params.touchStopImmediateCount,
+    calls: params.calls,
+    toasts: params.toasts,
+  }));
+})().catch(err => {
+  console.error(String(err && err.stack ? err.stack : err));
+  process.exit(1);
+});
 """
 
 
-def _run_quick_create_case(project_id="example-project"):
+def _run_quick_create_case(
+    project_id="example-project",
+    *,
+    active_project="active-project",
+    fail_new_session=False,
+    new_session_inflight=None,
+):
     payload = {
         "projectId": project_id,
+        "activeProject": active_project,
+        "filterProjectId": active_project,
         "calls": [],
         "stopCount": 0,
         "preventCount": 0,
@@ -296,6 +326,9 @@ def _run_quick_create_case(project_id="example-project"):
         "touchStopCount": 0,
         "touchPreventCount": 0,
         "touchStopImmediateCount": 0,
+        "failNewSession": fail_new_session,
+        "newSessionInFlight": new_session_inflight,
+        "toasts": [],
     }
     result = subprocess.run(
         [NODE, "-e", _HELPER, str(SESSIONS_JS), json.dumps(payload)],
@@ -327,3 +360,30 @@ def test_project_chip_quick_create_keeps_active_filter_and_uses_project_override
     assert out["touchStopCount"] >= 2
     assert out["touchPreventCount"] == 0
     assert out["touchStopImmediateCount"] >= 2
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_project_chip_quick_create_restores_filter_when_new_session_fails():
+    out = _run_quick_create_case(
+        "project-123",
+        active_project="keep-me",
+        fail_new_session=True,
+    )
+
+    assert out["filterProjectId"] == "keep-me"
+    assert {"type": "set-filter", "projectId": "project-123"} in out["calls"]
+    assert {"type": "set-filter", "projectId": "keep-me"} in out["calls"]
+    assert any(msg.startswith("New conversation failed:") for msg in out["toasts"])
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_project_chip_quick_create_leaves_filter_unchanged_during_inflight_guard():
+    out = _run_quick_create_case(
+        "project-123",
+        active_project="keep-me",
+        new_session_inflight={"session_id": "existing"},
+    )
+
+    assert out["filterProjectId"] == "keep-me"
+    assert {"type": "set-filter", "projectId": "project-123"} not in out["calls"]
+    assert "newSession" not in out

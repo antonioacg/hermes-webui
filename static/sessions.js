@@ -6165,10 +6165,20 @@ function _attachProjectQuickCreateButton(chip, project){
     if(typeof e.stopPropagation==='function') e.stopPropagation();
     if(typeof e.stopImmediatePropagation==='function') e.stopImmediatePropagation();
   };
-  btn.onclick=(e)=>{
+  btn.onclick=async(e)=>{
     stop(e);
+    if(_newSessionInFlight){
+      await newSession(false,{project_id:project.project_id});
+      return;
+    }
+    const previousProject=(typeof _activeProject!=='undefined')?_activeProject:NO_PROJECT_FILTER;
     _setActiveProjectFilter(project.project_id);
-    void newSession(false,{project_id:project.project_id});
+    try{
+      await newSession(false,{project_id:project.project_id});
+    }catch(err){
+      _setActiveProjectFilter(previousProject);
+      if(typeof showToast==='function') showToast('New conversation failed: '+(err&&err.message||err));
+    }
   };
   btn.ondblclick=(e)=>{stop(e);};
   btn.oncontextmenu=(e)=>{stop(e);};
