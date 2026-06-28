@@ -65,7 +65,7 @@ def test_file_read_returns_office_preview_payload_for_docx(tmp_path, monkeypatch
     assert payload["office_format"] == "docx"
     assert payload["render_mode"] == "code"
     assert payload["editable"] is True
-    assert payload["content"] == "alpha\n\nbeta"
+    assert payload["content"] == "alpha\nbeta"
 
 
 def test_office_save_route_accepts_safe_docx_and_rejects_preview_only_formats(tmp_path, monkeypatch):
@@ -118,7 +118,7 @@ def test_workspace_js_edit_button_uses_server_editable_flag():
     assert "_previewServerEditable===false" in WORKSPACE_JS
     assert "This Office document is preview-only." in WORKSPACE_JS
     assert "_previewSaveRoute" in WORKSPACE_JS
-    assert "_previewSaveRoute = data.office_format==='docx' ? '/api/file/office-save' : '/api/file/save';" in WORKSPACE_JS
+    assert "_previewSaveRoute = data.preview_kind==='office' ? '/api/file/office-save' : '/api/file/save';" in WORKSPACE_JS
 
 
 def test_pdf_preview_path_is_unchanged():

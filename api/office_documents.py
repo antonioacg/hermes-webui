@@ -48,7 +48,7 @@ def _docx_preview_text(document: Document) -> str:
             cells = [_normalise_preview_text(cell.text) for cell in row.cells]
             table_lines.append("\t".join(cells))
         chunks.append("\n".join(table_lines))
-    return "\n\n".join(chunks).strip()
+    return "\n".join(chunks).strip()
 
 
 def _docx_editability(document: Document) -> tuple[bool, str | None]:
