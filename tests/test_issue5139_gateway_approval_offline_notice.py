@@ -8,7 +8,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from api.config import STREAMS, STREAMS_LOCK
+from api.config import STREAMS, STREAMS_LOCK, invalidate_gateway_caps
 from api.gateway_chat import _run_gateway_chat_streaming
 
 REPO = Path(__file__).resolve().parents[1]
@@ -141,6 +141,8 @@ def test_gateway_chat_keeps_unsupported_warning_for_404_capabilities_probe():
         resp.__exit__ = lambda s, *a: None
         return resp
 
+    invalidate_gateway_caps()
+
     try:
         with patch.dict("os.environ", {"HERMES_WEBUI_CHAT_BACKEND": "gateway"}):
             with patch("urllib.request.urlopen", side_effect=fake_urlopen), \
@@ -157,6 +159,7 @@ def test_gateway_chat_keeps_unsupported_warning_for_404_capabilities_probe():
     finally:
         with STREAMS_LOCK:
             STREAMS.pop(stream_id, None)
+        invalidate_gateway_caps()
 
     warnings = [item for item in events if isinstance(item, tuple) and item[0] == "warning"]
     assert warnings
