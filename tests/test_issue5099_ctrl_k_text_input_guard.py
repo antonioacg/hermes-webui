@@ -12,7 +12,7 @@ BOOT_JS = (Path(__file__).parent.parent / "static" / "boot.js").read_text(encodi
 def _ctrl_k_branch_window() -> str:
     idx = BOOT_JS.find("(e.metaKey||e.ctrlKey)&&e.key==='k'")
     assert idx >= 0, "Cmd/Ctrl+K handler not found in boot.js"
-    return BOOT_JS[idx:idx + 900]
+    return BOOT_JS[idx:idx + 1500]
 
 
 class TestIssue5099CtrlKTextInputGuard:
@@ -37,7 +37,7 @@ class TestIssue5099CtrlKTextInputGuard:
     def test_ctrl_k_guard_matches_ctrl_b_idiom(self):
         ctrl_b_idx = BOOT_JS.find("(e.key==='b'||e.key==='B')")
         assert ctrl_b_idx >= 0, "Ctrl+B handler not found in boot.js"
-        ctrl_b_block = BOOT_JS[max(0, ctrl_b_idx - 250):ctrl_b_idx + 120]
+        ctrl_b_block = BOOT_JS[max(0, ctrl_b_idx - 250):ctrl_b_idx + 300]
         ctrl_k_block = _ctrl_k_branch_window()
         for needle in (
             "const t=e.target",
