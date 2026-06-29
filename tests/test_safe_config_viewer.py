@@ -62,10 +62,22 @@ class _FakeHandler:
 
 
 def _call_safe_config(monkeypatch, config: dict, config_path: Path | None = None):
-    """Invoke handle_get for /api/config/safe and return the FakeHandler."""
+    """Invoke handle_get for /api/config/safe and return the FakeHandler.
+
+    As of #5088 the viewer reads the RAW config FILE (not the env-expanded
+    ``get_config()``), so write ``config`` to ``config_path`` and point the
+    raw loader at it. ``get_config`` is still patched for any incidental caller.
+    """
     monkeypatch.setattr(routes, "get_config", lambda: config)
-    if config_path is not None:
-        monkeypatch.setattr(routes, "_get_config_path", lambda: config_path)
+    if config_path is None:
+        import tempfile
+        config_path = Path(tempfile.mkdtemp()) / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    import yaml as _yaml
+    config_path.write_text(_yaml.safe_dump(config, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    monkeypatch.setattr(routes, "_get_config_path", lambda: config_path)
+    import api.config as _cfg
+    monkeypatch.setattr(_cfg, "_get_config_path", lambda: config_path)
     handler = _FakeHandler()
     parsed = urlparse("http://example.com/api/config/safe")
     routes.handle_get(handler, parsed)
@@ -308,3 +320,63 @@ def test_safe_config_i18n_and_changelog_entries_exist():
         assert key in I18N_JS
     assert "safe, read-only config.yaml viewer" in CHANGELOG
     assert "#2929" in CHANGELOG
+
+
+# --- #5088 regressions: inline-credential + env-expansion leaks ---------------
+
+def test_url_userinfo_under_nonsensitive_key_is_scrubbed():
+    """A password embedded in a URL/DSN under a NON-sensitive key must not leak.
+
+    The key ("proxy" / "database.dsn") is not in the sensitive-fragment list, so
+    the path-based [REDACTED] does not fire; the unconditional scalar scrubber
+    must mask the userinfo. Regression for #5088 (reproduced leak).
+    """
+    safe = routes._redact_config_for_display({
+        "proxy": "http://admin:P4ssw0rd@10.0.0.1:8080",
+        "database": {"dsn": "postgres://user:HUNTER2pw@host:5432/db"},
+    })
+    assert "P4ssw0rd" not in json.dumps(safe)
+    assert "HUNTER2pw" not in json.dumps(safe)
+    # host/scheme preserved (only the credential span is masked)
+    assert "10.0.0.1:8080" in safe["proxy"]
+    assert "***@" in safe["proxy"]
+
+
+def test_sensitive_query_param_under_nonsensitive_key_is_scrubbed():
+    """A ?token=/&key= secret in a URL under a non-sensitive key must not leak."""
+    safe = routes._redact_config_for_display({
+        "callback_url": "https://h/cb?token=QUERYSECRET987&page=2",
+    })
+    blob = json.dumps(safe)
+    assert "QUERYSECRET987" not in blob
+    assert "token=***" in safe["callback_url"]
+    # non-sensitive params preserved
+    assert "page=2" in safe["callback_url"]
+
+
+def test_scrub_is_idempotent_and_noop_on_plain_strings():
+    once = routes._scrub_config_scalar_secrets("http://u:pw@h/x?token=ABC")
+    twice = routes._scrub_config_scalar_secrets(once)
+    assert once == twice
+    # no URL shape -> unchanged
+    assert routes._scrub_config_scalar_secrets("just a plain note") == "just a plain note"
+
+
+def test_safe_config_reads_raw_yaml_not_env_expanded(monkeypatch, tmp_path):
+    """${VAR} placeholders must stay literal (or be redacted) — never expanded.
+
+    Highest-severity #5088 vector: _safe_config_yaml_text() must build from the
+    RAW config file, never get_config() (whose cache expands ${VAR} to the real
+    secret). Here the secret sits under a sensitive key (api_key) so it is also
+    [REDACTED], but the critical assertion is the EXPANDED value never appears.
+    """
+    import api.config as cfg
+    cfgp = tmp_path / "config.yaml"
+    cfgp.write_text(
+        "providers:\n  openai:\n    api_key: ${SAFE_VIEWER_TEST_SECRET}\n"
+        "misc:\n  endpoint: ${SAFE_VIEWER_TEST_SECRET}\n"
+    )
+    monkeypatch.setenv("SAFE_VIEWER_TEST_SECRET", "sk-ENV-EXPANDED-LEAK-XYZ")
+    monkeypatch.setattr(cfg, "_get_config_path", lambda: cfgp)
+    text, _n = routes._safe_config_yaml_text()
+    assert "sk-ENV-EXPANDED-LEAK-XYZ" not in text  # the expanded secret must NOT leak

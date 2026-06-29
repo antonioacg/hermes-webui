@@ -433,6 +433,50 @@ def _config_path_is_sensitive(path: tuple[str, ...]) -> bool:
     return any(fragment in path_text for fragment in _SENSITIVE_CONFIG_KEY_FRAGMENTS)
 
 
+# Sensitive URL query-parameter names whose VALUE must be masked even when the
+# parameter sits inside a string under a non-sensitive config key (e.g.
+# ``callback_url: https://h/cb?token=SECRET``).
+_SENSITIVE_QUERY_PARAM_NAMES = (
+    "token", "access_token", "refresh_token", "id_token", "auth_token",
+    "key", "api_key", "apikey", "secret", "client_secret", "password",
+    "passwd", "sig", "signature", "bearer", "code",
+)
+
+
+def _scrub_config_scalar_secrets(text: str) -> str:
+    """Mask credentials embedded in a scalar STRING regardless of its config key.
+
+    This runs UNCONDITIONALLY for the safe-config viewer (never gated by
+    ``api_redact_enabled``), because the path-based key check (#2929) only
+    catches values under a sensitive *key name* — it misses a credential that
+    is inline inside an otherwise-benign string under a non-sensitive key.
+    Two such vectors leak otherwise (#5088):
+
+      1. URL / DSN userinfo:  ``scheme://user:PASSWORD@host``  ->  ``user:***@host``
+      2. Sensitive query params:  ``...?token=SECRET&x=1``     ->  ``...?token=***&x=1``
+
+    Conservative + idempotent: only rewrites the credential span, leaves the
+    rest of the string intact, and is a no-op on strings with no URL shape.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    # 1) URL/DSN userinfo:  scheme://user:pass@host  ->  scheme://user:***@host
+    text = re.sub(
+        r"([a-zA-Z][a-zA-Z0-9+.\-]*://[^/\s:@]+):[^/\s@]+@",
+        r"\1:***@",
+        text,
+    )
+    # 2) Sensitive query/fragment params:  ?token=SECRET / &key=SECRET  ->  =***
+    if "?" in text or "&" in text or "=" in text:
+        param_alt = "|".join(re.escape(p) for p in _SENSITIVE_QUERY_PARAM_NAMES)
+        text = re.sub(
+            r"(?i)([?&;](?:" + param_alt + r")=)[^&;#\s]+",
+            r"\1***",
+            text,
+        )
+    return text
+
+
 def _redact_config_for_display(value, *, path: tuple[str, ...] = ()):
     """Return a config structure safe to display in the browser.
 
@@ -446,11 +490,13 @@ def _redact_config_for_display(value, *, path: tuple[str, ...] = ()):
     two branches (path-check after the type passthrough) reintroduces the leak —
     see tests/test_safe_config_viewer.py for the non-vacuous regression.
 
-    Non-secret strings still pass through the existing value-level redactor
-    (``_redact_text``) so accidentally pasted tokens do not leak from unrelated
-    fields. NOTE: that value-level scrub respects ``api_redact_enabled`` and is a
-    no-op when an operator has disabled redaction; the path-based ``[REDACTED]``
-    above is unconditional (maintainer fix #3 documents this in the UI).
+    Non-secret strings are scrubbed UNCONDITIONALLY for inline credentials
+    (``_scrub_config_scalar_secrets`` — URL userinfo + sensitive query params,
+    #5088) and then run through the existing value-level redactor
+    (``_redact_text``) for accidentally-pasted tokens. The inline scrub does NOT
+    respect ``api_redact_enabled`` (the safe-config viewer must never leak a
+    credential, even when an operator disabled response redaction); the
+    path-based ``[REDACTED]`` above is likewise unconditional.
     """
     if isinstance(value, dict):
         return {
@@ -465,12 +511,29 @@ def _redact_config_for_display(value, *, path: tuple[str, ...] = ()):
     # Non-sensitive key path: pass scalars through; scrub free-text values.
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    return _redact_text(str(value))
+    # #5088: scrub inline URL userinfo / query-param secrets UNCONDITIONALLY,
+    # then apply the (api_redact_enabled-gated) free-text token redactor.
+    return _redact_text(_scrub_config_scalar_secrets(str(value)))
 
 
 def _safe_config_yaml_text() -> tuple[str, int]:
-    """Return (yaml_text, redacted_count) for the active profile config."""
-    redacted = _redact_config_for_display(get_config())
+    """Return (yaml_text, redacted_count) for the active profile config.
+
+    Reads the RAW (un-env-expanded) config file (#5088): `get_config()` returns
+    the process cache with ``${VAR}`` placeholders already expanded to their real
+    secret values, so building the viewer from it would serve the EXPANDED secret
+    to the browser even though the user safely parameterized it via env vars. The
+    raw file keeps ``${OPENAI_API_KEY}`` a literal placeholder. (Profile scope is
+    enforced by the route's ``profile_env_for_active_request_readonly`` wrapper,
+    so ``_get_config_path()`` resolves the active profile's config.yaml.)
+    """
+    try:
+        from api.config import _get_config_path, _load_yaml_config_file_raw
+        raw_config = _load_yaml_config_file_raw(_get_config_path())
+    except Exception:
+        # Fail closed: never fall back to the env-EXPANDED get_config() here.
+        raw_config = {}
+    redacted = _redact_config_for_display(raw_config)
     try:
         import yaml as _yaml
 
