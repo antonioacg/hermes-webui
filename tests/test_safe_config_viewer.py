@@ -488,3 +488,23 @@ def test_yaml_alias_shared_secret_is_redacted_everywhere():
     assert safe["ui"]["theme"] == "dark"
     assert safe["ui"]["lang"] == "en"
     assert safe["port"] == 8787
+
+
+def test_bare_key_segment_and_percent_encoded_params_scrubbed(monkeypatch):
+    """#5088 round 6 (Codex re-gate): a bare `key:` segment must redact (without
+    masking benign compound names like record_key/theme_key), and percent-encoded
+    nested query credentials (%3Ftoken%3D, %26api_key%3D) must be masked."""
+    monkeypatch.setattr(routes, "_redact_text", lambda t, *, _enabled=None: t)
+    safe = routes._redact_config_for_display({
+        "service": {"key": "a1b2c3d4e5f6g7h8i9j0"},
+        "ui": {"record_key": "Ctrl+R", "theme_key": "dark"},
+        "encoded": {"url": "https://outer/cb?redirect=https%3A%2F%2Finner%2Fcb%3Ftoken%3DENCODEDSECRET"},
+        "encoded2": {"url": "https://o?x=1%26api_key%3DENCKEY2"},
+    })
+    blob = json.dumps(safe)
+    assert "a1b2c3d4e5f6g7h8i9j0" not in blob   # bare key: redacted
+    assert "ENCODEDSECRET" not in blob          # %3Ftoken%3D masked
+    assert "ENCKEY2" not in blob                # %26api_key%3D masked
+    # benign compound 'key' names NOT over-masked
+    assert safe["ui"]["record_key"] == "Ctrl+R"
+    assert safe["ui"]["theme_key"] == "dark"

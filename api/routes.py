@@ -427,10 +427,29 @@ _SENSITIVE_CONFIG_KEY_FRAGMENTS = (
 )
 
 
+# Bare key-segment names that are sensitive ONLY as an EXACT path segment (not a
+# substring) — so ``service.key`` / ``token`` / ``password`` redact, but benign
+# compound names like ``record_key`` / ``theme_key`` / ``token_budget`` do not.
+_SENSITIVE_EXACT_SEGMENTS = frozenset({
+    "key", "secret", "token", "password", "passwd", "pwd", "credential",
+    "bearer", "authorization", "passphrase",
+})
+
+
 def _config_path_is_sensitive(path: tuple[str, ...]) -> bool:
-    """True when any segment of ``path`` names a credential-bearing key."""
+    """True when ``path`` names a credential-bearing key.
+
+    Two matchers: (a) any fragment in ``_SENSITIVE_CONFIG_KEY_FRAGMENTS`` appears
+    as a SUBSTRING of the dotted path (e.g. ``api_key``, ``client_secret``); and
+    (b) any single path SEGMENT exactly equals a bare sensitive name in
+    ``_SENSITIVE_EXACT_SEGMENTS`` (e.g. ``service.key`` -> the segment ``key`` is
+    sensitive), which catches bare ``key:``/``token:`` without substring-masking
+    benign compound names like ``record_key`` (#5088 round 6).
+    """
     path_text = ".".join(path).lower()
-    return any(fragment in path_text for fragment in _SENSITIVE_CONFIG_KEY_FRAGMENTS)
+    if any(fragment in path_text for fragment in _SENSITIVE_CONFIG_KEY_FRAGMENTS):
+        return True
+    return any(str(seg).lower() in _SENSITIVE_EXACT_SEGMENTS for seg in path)
 
 
 # Sensitive URL query/fragment-parameter names whose VALUE must be masked even
@@ -497,6 +516,14 @@ def _scrub_config_scalar_secrets(text: str) -> str:
         param_alt = "|".join(re.escape(p) for p in _SENSITIVE_QUERY_PARAM_NAMES)
         text = re.sub(
             r"(?i)([?&;#](?:" + param_alt + r")=)[^&;#\s]+",
+            r"\1***",
+            text,
+        )
+        # Percent-encoded delimiters (#5088 round 6): a nested/encoded URL like
+        # ``?redirect=https%3A%2F%2Finner%3Ftoken%3DSECRET`` hides the credential
+        # behind %3F (?) %26 (&) %3B (;) %23 (#) %3D (=). Mask those too.
+        text = re.sub(
+            r"(?i)((?:%3F|%26|%3B|%23)(?:" + param_alt + r")%3D)[^&;#\s%]+",
             r"\1***",
             text,
         )
