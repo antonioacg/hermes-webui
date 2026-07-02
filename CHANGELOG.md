@@ -7,6 +7,10 @@
 
 - **The busy-time send behavior is now called "Default message mode," and new installs default to Steer.** The Settings → Preferences control formerly labeled "Busy input mode" is renamed to "Default message mode," and a fresh install now defaults to **Steer** (inject a mid-turn correction without interrupting) instead of Queue. Your existing choice is preserved — if you ever saved settings, your current mode (Queue/Interrupt/Steer) is migrated as-is and unchanged; only never-configured installs pick up the new Steer default. The saved preference still survives a reload or a brief server outage (the localStorage mirror from the previous release is intact). Thanks @rodboev. (#5162, #5145)
 
+### Added
+
+- **Add a self-hosted provider (Ollama or LM Studio) from Settings.** After onboarding, a new Settings control lets you point WebUI at a local OpenAI-compatible model server (Ollama / LM Studio) by choosing the provider, model, and base URL — no hand-editing `config.yaml`. The base URL is validated (scheme + provider allowlist) and persisted for the agent's provider client. An optional "Test connection" button reuses the existing authenticated onboarding probe to fetch the model list from the URL you enter. Thanks @rodboev. (#5408, #3260)
+
 ### Fixed
 
 - **Screen readers no longer announce the approval and clarify dialogs while they're inactive.** The approval and clarify flyout cards stayed in the accessibility tree and tab order even when hidden, so a screen-reader user could land on a dialog that isn't actually showing. Inactive cards are now removed from assistive tech (`aria-hidden` + `inert`) and visually hidden (`hidden` + `display:none`), and restored when shown — with the show sequence ordered so the entrance animation still plays correctly. Thanks @sheldon-im. (#5404)
