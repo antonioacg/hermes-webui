@@ -588,9 +588,20 @@ def test_queue_card_cross_session_helper_used_only_for_session_change(cleanup_te
     assert "_clearQueueCardDisplay(currentSid);" in load_body[cross_start:cross_end], (
         "queue-card clear helper must be inside the cross-session branch"
     )
-    same_session_idx = load_body.find("if(currentSid===sid && !forceReload && !_loadingSessionId) return;")
+    # The same-session guard still precedes the cross-session branch. #4946
+    # turned the bare early-return into a block that also acknowledges the
+    # visit (clears the stale unread dot) before returning; the guard condition
+    # and its position ahead of the cross-session branch are what R15c pins.
+    same_session_idx = load_body.find("if(currentSid===sid && !forceReload && !_loadingSessionId){")
     assert same_session_idx >= 0
     assert same_session_idx < cross_start
+    # The same-session block must NOT clear the queue card — that helper stays
+    # exclusive to the cross-session branch (the whole point of R15c).
+    same_session_end = load_body.find("_loadingSessionId = sid;", same_session_idx)
+    assert same_session_end > same_session_idx
+    assert "_clearQueueCardDisplay(" not in load_body[same_session_idx:same_session_end], (
+        "queue-card clear helper must NOT fire on the same-session path"
+    )
 
 
 def test_queue_card_clear_helper_tracks_render_epoch(cleanup_test_sessions):
