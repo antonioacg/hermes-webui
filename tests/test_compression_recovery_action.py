@@ -9,6 +9,8 @@ from api.compression_recovery import (
     stamp_compression_exhausted_recovery,
 )
 from api.models import Session
+from api.session_recovery import _state_db_row_to_sidecar
+from api.webui_session_db import WebUIJsonSessionDB
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -283,6 +285,31 @@ def test_recovery_metadata_is_persisted_and_exposed_in_compact_session():
     assert recovery["terminal_state"] == "compression_exhausted"
     assert compact["recommended_recovery_action"] == "start_focused_continuation"
     assert compact["compression_recovery"]["recommended_action"] == "start_focused_continuation"
+
+
+def test_recovery_child_markers_round_trip_through_state_db_sidecar_rebuild(tmp_path):
+    db = WebUIJsonSessionDB(tmp_path)
+    db.write_session(
+        {
+            "session_id": "recoverychild1",
+            "title": "Focused continuation",
+            "model": "gpt-4o",
+            "started_at": 1700000000,
+            "messages": [],
+            "parent_session_id": "recoverysrc3",
+            "compression_recovery_source_session_id": "recoverysrc3",
+            "compression_recovery_action": "start_focused_continuation",
+        }
+    )
+    row = db.list_sessions()[0]
+
+    assert row["compression_recovery_source_session_id"] == "recoverysrc3"
+    assert row["compression_recovery_action"] == "start_focused_continuation"
+
+    sidecar = _state_db_row_to_sidecar({"id": "recoverychild1", **row, "messages": []})
+
+    assert sidecar["compression_recovery_source_session_id"] == "recoverysrc3"
+    assert sidecar["compression_recovery_action"] == "start_focused_continuation"
 
 
 def test_compression_recovery_ui_wires_card_action_and_send_intercept():

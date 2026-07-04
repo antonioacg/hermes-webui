@@ -486,6 +486,8 @@ def _state_db_row_to_sidecar(row: dict) -> dict:
         'last_prompt_tokens': None,
         'compression_recovery': {},
         'recommended_recovery_action': None,
+        'compression_recovery_source_session_id': row.get('compression_recovery_source_session_id') or None,
+        'compression_recovery_action': row.get('compression_recovery_action') or None,
         'gateway_routing': None,
         'gateway_routing_history': [],
         'llm_title_generated': False,

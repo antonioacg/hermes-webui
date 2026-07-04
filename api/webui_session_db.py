@@ -53,6 +53,8 @@ _METADATA_FIELDS = frozenset(
         "last_prompt_tokens",
         "compression_recovery",
         "recommended_recovery_action",
+        "compression_recovery_source_session_id",
+        "compression_recovery_action",
         "truncation_watermark",
         "truncation_boundary",
         "gateway_routing",
