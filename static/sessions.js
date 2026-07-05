@@ -4251,6 +4251,17 @@ function _invalidateSessionListRenders(){
   _renderSessionListGen++;
   _pendingSessionListPayload = null;
   _renderSessionListQueuedRequest = null;
+  // A retry whose fetch is invalidated here (e.g. a profile switch mid-retry)
+  // would otherwise leave the error note stuck as an inert "Retrying…" button
+  // with no request in flight — the stale fetch returns before
+  // _showSessionListLoadError and the .finally() bails when the old button was
+  // removed. Clear the pending retry markers so the next repaint shows an
+  // actionable idle Retry again.
+  if(_sessionListLoadError && (_sessionListLoadError.retrying || _sessionListLoadError._retryFailedFocus)){
+    _sessionListLoadError = {..._sessionListLoadError};
+    delete _sessionListLoadError.retrying;
+    delete _sessionListLoadError._retryFailedFocus;
+  }
 }
 if(typeof window!=='undefined') window._invalidateSessionListRenders = _invalidateSessionListRenders;
 
@@ -4663,6 +4674,10 @@ function _mergeRenderSessionListOptions(prev, next){
 function _showSessionListLoadError(error){
   console.warn('renderSessionList',error);
   const isTimeout=Boolean(error&&(error.timeout===true||error.name==='TimeoutError'));
+  // If this error is landing while a retry was in flight, flag the fresh Retry
+  // button (rebuilt by the repaint) to reclaim keyboard focus so keyboard users
+  // aren't dropped to <body> on a failed retry.
+  const wasRetrying=Boolean(_sessionListLoadError&&_sessionListLoadError.retrying);
   _sessionListLoadError={
     message:isTimeout
       ? 'Session list is taking longer than expected.'
@@ -4670,7 +4685,73 @@ function _showSessionListLoadError(error){
     detail:isTimeout
       ? 'The backend may still be scanning a very large session history.'
       : String(error&&error.message?error.message:''),
+    _retryFailedFocus:wasRetrying,
   };
+}
+
+function _renderSessionListLoadErrorNote(){
+  if(!_sessionListLoadError) return null;
+  const note=document.createElement('div');
+  note.className='session-list-error session-empty-note';
+  // a11y: announce load-error / retry-failure transitions to screen readers
+  // (the note is re-rendered on both the pending click and the failure repaint).
+  note.setAttribute('role','status');
+  note.setAttribute('aria-live','polite');
+  const title=document.createElement('div');
+  title.textContent=_sessionListLoadError.message||'Could not load conversations.';
+  note.appendChild(title);
+  if(_sessionListLoadError.detail){
+    const detail=document.createElement('div');
+    detail.className='session-list-error-detail';
+    detail.textContent=_sessionListLoadError.detail;
+    note.appendChild(detail);
+  }
+  const retry=document.createElement('button');
+  retry.type='button';
+  retry.className='session-list-error-retry';
+  const retrying=Boolean(_sessionListLoadError.retrying);
+  // Use aria-disabled (not the disabled property) for the pending state so the
+  // button can keep keyboard focus across the sidebar rebuild; the click/keydown
+  // guards below make it inert while busy.
+  const setPending=()=>{
+    retry.textContent='Retrying…';
+    retry.setAttribute('aria-disabled','true');
+    retry.setAttribute('aria-busy','true');
+    retry.onclick=null;
+  };
+  const bindRetry=()=>{
+    retry.onclick=(e)=>{
+      e.stopPropagation();
+      if(!_sessionListLoadError||_sessionListLoadError.retrying) return;
+      if(retry.getAttribute('aria-disabled')==='true') return;
+      setPending();
+      _sessionListLoadError={..._sessionListLoadError,retrying:true};
+      renderSessionListFromCache();
+      void renderSessionList({deferWhileInteracting:false}).finally(()=>{
+        if(!retry.parentNode||(_sessionListLoadError&&_sessionListLoadError.retrying)) return;
+        retry.textContent='Retry';
+        retry.removeAttribute('aria-disabled');
+        retry.removeAttribute('aria-busy');
+        bindRetry();
+      });
+    };
+  };
+  if(retrying){
+    setPending();
+  }else{
+    retry.textContent='Retry';
+    retry.removeAttribute('aria-disabled');
+    bindRetry();
+    // On a failure repaint that replaces a pending button, restore keyboard
+    // focus to the fresh Retry button so keyboard users aren't dropped to body.
+    if(_sessionListLoadError._retryFailedFocus){
+      delete _sessionListLoadError._retryFailedFocus;
+      const _refocus=()=>{ try{ if(typeof retry.focus==='function') retry.focus(); }catch(_e){} };
+      if(typeof requestAnimationFrame==='function') requestAnimationFrame(_refocus); else _refocus();
+    }
+  }
+  note.appendChild(retry);
+  return note;
 }
 
 async function _runRenderSessionListRefresh(opts, _gen){
@@ -6709,23 +6790,8 @@ function renderSessionListFromCache(){
   if(_sessionSelectMode&&_selectedSessions.size>0){batchBar.style.display='flex';_renderBatchActionBar();}
   else{batchBar.style.display='none';}
   if(_sessionListLoadError){
-    const note=document.createElement('div');
-    note.className='session-list-error session-empty-note';
-    const title=document.createElement('div');
-    title.textContent=_sessionListLoadError.message||'Could not load conversations.';
-    note.appendChild(title);
-    if(_sessionListLoadError.detail){
-      const detail=document.createElement('div');
-      detail.className='session-list-error-detail';
-      detail.textContent=_sessionListLoadError.detail;
-      note.appendChild(detail);
-    }
-    const retry=document.createElement('button');
-    retry.type='button';
-    retry.textContent='Retry';
-    retry.onclick=(e)=>{e.stopPropagation();_sessionListLoadError=null;void renderSessionList({deferWhileInteracting:false});};
-    note.appendChild(retry);
-    list.appendChild(note);
+    const note=_renderSessionListLoadErrorNote();
+    if(note) list.appendChild(note);
   }
   if(window._showCliSessions || cliSessionCount>0){
     const sourceTabs=document.createElement('div');
