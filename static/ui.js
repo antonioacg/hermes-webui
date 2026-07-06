@@ -983,13 +983,44 @@ function _browserOverflowAnchorActive(el){
   if(!el) return false;
   try{ return getComputedStyle(el).overflowAnchor==='auto'; }catch(_){ return false; }
 }
-// Stable touch-viewport predicate for the issue #5637 stale-anchor hold gate.
-// The two stale-anchor refusals below assume the browser's native overflow-anchor
-// layer will hold the viewport once the JS restore is refused. That layer is only
-// active where `.messages` computes to `overflow-anchor:auto` — touch viewports.
-// On hover+fine-pointer desktops the CSS keeps it `none`, so refusing the restore
-// leaves NOTHING to hold the reader (the desktop regression). We must NOT decide
-// "is this a touch viewport" with `_browserOverflowAnchorActive(#messages)` alone,
+// iOS/iPadOS WebKit detection for the issue #5637 stale-anchor hold gate. CSS
+// overflow-anchor is INERT on iOS WebKit (see static/style.css — the mobile
+// content-visibility block deliberately does NOT set overflow-anchor:none because
+// it is a no-op on iOS and, on Android, re-opens the #4856/#5338 jump-to-top
+// regression). So `overflow-anchor:auto` computes on `.messages` on iOS but the
+// engine never actually holds the viewport there. The stale-anchor refusal relies
+// on that engine to hold the reader, so it is only safe on Android (working
+// overflow-anchor), NOT iOS — refusing on iOS leaves a scrolled-up reader unheld,
+// the same class as the desktop regression, one platform over.
+// Detection covers classic iPhone/iPod/iPad UAs AND iPadOS 13+, which reports a
+// desktop 'MacIntel' platform but is distinguishable by touch support (a real Mac
+// has maxTouchPoints 0). Excludes MSStream (old IE on Windows Phone false-matched
+// 'like iPhone').
+function _isIOSWebKit(){
+  try{
+    const nav=(typeof navigator!=='undefined')?navigator:null;
+    if(!nav) return false;
+    if(nav.MSStream) return false;
+    const ua=String(nav.userAgent||'');
+    if(/iP(ad|hone|od)/.test(ua)) return true;
+    // iPadOS 13+ masquerades as macOS; a Mac has no touch, an iPad does.
+    if(nav.platform==='MacIntel' && Number(nav.maxTouchPoints)>1) return true;
+  }catch(_){}
+  return false;
+}
+// Stable "native overflow-anchor holds this viewport" predicate for the issue
+// #5637 stale-anchor hold gate. The two stale-anchor refusals below assume the
+// browser's native overflow-anchor layer will hold the viewport once the JS
+// restore is refused. That is only true where the engine ACTUALLY compensates:
+//   - desktop (hover+fine-pointer): CSS keeps `.messages` at overflow-anchor:none
+//     -> engine off -> refusing leaves nothing to hold the reader. Excluded via
+//     matchMedia('(pointer:coarse)') being false.
+//   - iOS WebKit: overflow-anchor is INERT (see _isIOSWebKit) even though it
+//     computes to `auto` -> engine never holds -> refusing strands a scrolled-up
+//     reader. Excluded via _isIOSWebKit().
+//   - Android touch: overflow-anchor:auto AND the engine works -> refusing is safe,
+//     native anchoring holds. This is the ONLY platform the refusal targets.
+// We must NOT decide this with `_browserOverflowAnchorActive(#messages)` alone,
 // because `_restoreMessageViewportAnchor` temporarily writes an inline
 // `overflowAnchor:'none'` on #messages for its own scroll write and only restores
 // it on the next frame; when the realign fires every live tick that inline 'none'
@@ -1000,6 +1031,9 @@ function _browserOverflowAnchorActive(el){
 // desktop (fine pointer) stays false. Fall back to the computed-anchor probe when
 // matchMedia is unavailable.
 function _isTouchLikeMessageViewport(el){
+  // iOS WebKit is touch (pointer:coarse) but overflow-anchor is inert there, so the
+  // refusal's premise fails — treat it like desktop (keep the semantic realign).
+  if(_isIOSWebKit()) return false;
   try{
     if(typeof matchMedia==='function' && matchMedia('(pointer:coarse)').matches) return true;
   }catch(_){}

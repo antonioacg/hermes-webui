@@ -273,11 +273,14 @@ def test_fallback_allows_snapshot_top_on_desktop_no_native_anchor():
 # ---- predicate stability (_isTouchLikeMessageViewport) ---------------------------
 
 def _predicate_harness(*, pointer_coarse, computed_overflow_anchor, has_matchmedia=True,
-                       inline_overflow_anchor="") -> str:
+                       inline_overflow_anchor="", ua="Mozilla/5.0 (Linux; Android 13)",
+                       platform="Linux armv8l", max_touch_points=5) -> str:
     """Exercise the REAL _isTouchLikeMessageViewport + _browserOverflowAnchorActive
-    against a fake element, mocking matchMedia and getComputedStyle. `inline_overflow_anchor`
-    simulates the inline `overflowAnchor:'none'` that _restoreMessageViewportAnchor writes
-    on #messages mid-realign — the value the computed probe would transiently read."""
+    + _isIOSWebKit against a fake element, mocking matchMedia, getComputedStyle and
+    navigator. `inline_overflow_anchor` simulates the inline `overflowAnchor:'none'`
+    that _restoreMessageViewportAnchor writes on #messages mid-realign — the value the
+    computed probe would transiently read. `ua`/`platform`/`max_touch_points` drive the
+    _isIOSWebKit branch (default: an Android touch device that is NOT iOS)."""
     js = UI_JS_PATH.read_text(encoding="utf-8")
     mm = "true" if pointer_coarse else "false"
     has_mm = "true" if has_matchmedia else "false"
@@ -288,6 +291,9 @@ if (HAS_MM) {{
 }} else {{
   globalThis.matchMedia = undefined;
 }}
+// Node 18+ ships a built-in read-only `navigator`; a plain assignment is silently
+// ignored, so force the mock in with defineProperty.
+Object.defineProperty(globalThis, 'navigator', {{ configurable: true, value: {{ userAgent: {json.dumps(ua)}, platform: {json.dumps(platform)}, maxTouchPoints: {max_touch_points} }} }});
 // getComputedStyle reflects the INLINE override first (as a real browser would during
 // a realign burst), else the resting computed value.
 const el = {{ style: {{ overflowAnchor: {json.dumps(inline_overflow_anchor)} }} }};
@@ -296,6 +302,7 @@ globalThis.getComputedStyle = function(node){{
   return {{ overflowAnchor: inline || {json.dumps(computed_overflow_anchor)} }};
 }};
 eval(extractFunc('_browserOverflowAnchorActive'));
+eval(extractFunc('_isIOSWebKit'));
 eval(extractFunc('_isTouchLikeMessageViewport'));
 console.log(JSON.stringify({{ touchLike: _isTouchLikeMessageViewport(el) }}));
 """
@@ -333,6 +340,56 @@ def test_predicate_falls_back_to_computed_probe_without_matchmedia():
     overflow-anchor probe. A resting 'auto' (touch) -> true."""
     m = json.loads(_run_node(_predicate_harness(
         pointer_coarse=True, computed_overflow_anchor="auto", has_matchmedia=False,
+    )))
+    assert m["touchLike"] is True
+
+
+# ---- iOS WebKit exclusion (_isIOSWebKit) — overflow-anchor is inert on iOS -------
+
+def test_predicate_false_on_ios_iphone_despite_pointer_coarse():
+    """iOS gate cert (#5637 round-2 RED): an iPhone is pointer:coarse with a resting
+    computed overflow-anchor of 'auto', so the round-1 predicate would classify it as a
+    hold-capable touch viewport and let the stale-anchor refusal fire. But overflow-anchor
+    is INERT on iOS WebKit, so refusing the restore leaves a scrolled-up reader unheld —
+    the same class as the desktop regression. The predicate MUST report NOT touch on iOS so
+    the semantic realign is kept.
+    Mutation: remove the `if(_isIOSWebKit()) return false;` line and this FAILS (iPhone is
+    misclassified as a hold-capable touch viewport)."""
+    m = json.loads(_run_node(_predicate_harness(
+        pointer_coarse=True, computed_overflow_anchor="auto",
+        ua="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+           "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        platform="iPhone", max_touch_points=5,
+    )))
+    assert m["touchLike"] is False
+
+
+def test_predicate_false_on_ipados13_masquerading_as_mac():
+    """iPadOS 13+ reports a desktop UA + platform 'MacIntel' but has touch (maxTouchPoints>1),
+    unlike a real Mac. overflow-anchor is inert there too, so it must be excluded from the
+    refusal like the iPhone.
+    Mutation: drop the `platform==='MacIntel' && maxTouchPoints>1` branch in _isIOSWebKit and
+    this FAILS (iPad is treated as an anchor-capable touch device)."""
+    m = json.loads(_run_node(_predicate_harness(
+        pointer_coarse=True, computed_overflow_anchor="auto",
+        ua="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 "
+           "(KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        platform="MacIntel", max_touch_points=5,
+    )))
+    assert m["touchLike"] is False
+
+
+def test_predicate_true_on_android_not_ios():
+    """Android Chrome: pointer:coarse, overflow-anchor works, and it is NOT iOS — this is
+    the one platform where the refusal is safe, so the predicate stays true. Guards against
+    an over-broad _isIOSWebKit that would also exclude Android.
+    Mutation: broaden _isIOSWebKit to match any touch device (e.g. return maxTouchPoints>1)
+    and this FAILS (Android would be wrongly excluded, re-opening the mobile jump)."""
+    m = json.loads(_run_node(_predicate_harness(
+        pointer_coarse=True, computed_overflow_anchor="auto",
+        ua="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
+           "Chrome/120.0.0.0 Mobile Safari/537.36",
+        platform="Linux armv8l", max_touch_points=5,
     )))
     assert m["touchLike"] is True
 
