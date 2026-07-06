@@ -5,6 +5,7 @@
 
 ### Fixed
 
+- **Scrolling up into history during a live stream no longer throws you to the top.** While a reply was streaming, a mid-stream re-render (tool completion, activity-scene refresh, clarify echo) wipes and rebuilds the transcript, momentarily collapsing its height so the browser clamps the scroll position to the top. For a reader who had scrolled up into history, that stranded them at the top (a jump of thousands of pixels). The pre-wipe viewport is now restored for an unpinned reader instead of being left clamped; readers following the tail are unaffected. Thanks @allenliang2022. (#5681)
 - **No more mid-stream scroll jitter while following a streaming reply.** When you were pinned to the bottom of a live-streaming answer, every mid-stream re-render (tool completion, activity-scene refresh, clarify echo) caused a brief ~1-row up-and-back bounce, so a long streaming reply visibly shuddered. The tail is now re-anchored to the settled bottom in a microtask after the re-render (after layout flushes, before paint), so the short intermediate never reaches the screen. Only a reader already following the tail is affected — an unpinned reader parked up in history is never moved. Thanks @allenliang2022. (#5685)
 
 ### Documentation
