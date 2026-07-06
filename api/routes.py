@@ -16247,14 +16247,14 @@ def _handle_session_run_journal_stream_for_session(handler, parsed, session_id):
                     break
         except _CLIENT_DISCONNECT_ERRORS:
             pass
-        finally:
-            if subscriber is not stream and hasattr(stream, "unsubscribe"):
-                try:
-                    stream.unsubscribe(subscriber)
-                except Exception:
-                    pass
     except _CLIENT_DISCONNECT_ERRORS:
         pass
+    finally:
+        if subscriber is not None and subscriber is not stream and hasattr(stream, "unsubscribe"):
+            try:
+                stream.unsubscribe(subscriber)
+            except Exception:
+                pass
     return True
 
 

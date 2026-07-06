@@ -364,6 +364,66 @@ def test_session_route_live_delivery_skips_replayed_active_run_items(monkeypatch
     assert stream.unsubscribed is True
 
 
+def test_session_route_unsubscribes_when_replay_disconnects(monkeypatch):
+    import api.routes as routes
+
+    class _DisconnectingWfile:
+        def write(self, _data):
+            raise BrokenPipeError("client closed")
+
+        def flush(self):
+            pass
+
+    class _FakeStream:
+        def __init__(self):
+            self.q = queue.Queue()
+            self.unsubscribed = False
+
+        def subscribe_with_snapshot(self):
+            return self.q, {"last_event_id": "run_active:1"}
+
+        def unsubscribe(self, q):
+            self.unsubscribed = q is self.q
+
+    stream = _FakeStream()
+    monkeypatch.setattr(routes, "_session_id_visible_to_request_profile", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        routes,
+        "get_session",
+        lambda sid, metadata_only=False: SimpleNamespace(
+            session_id=sid,
+            compact=lambda **_kwargs: {"session_id": sid, "title": "Session"},
+        ),
+    )
+    monkeypatch.setattr(routes, "_active_run_stream_for_session", lambda *_args, **_kwargs: "run_active")
+    monkeypatch.setattr(routes, "STREAMS", {"run_active": stream})
+    monkeypatch.setattr(
+        routes,
+        "read_session_run_events",
+        lambda *_args, **_kwargs: {
+            "status": "ok",
+            "events": [
+                {
+                    "run_id": "run_prev",
+                    "seq": 1,
+                    "event": "token",
+                    "payload": {"text": "replayed"},
+                    "event_id": "run_prev:1",
+                },
+            ],
+        },
+    )
+
+    handler = _FakeHandler()
+    handler.wfile = _DisconnectingWfile()
+    assert routes._handle_session_sse_stream_for_session(
+        handler,
+        urlparse("/api/sessions/session_1/events?after_event_id=run_prev:0"),
+        "session_1",
+    )
+    assert stream.unsubscribed is True
+
+
 def test_session_route_live_delivery_without_cursor_keeps_buffered_active_items(monkeypatch):
     import api.routes as routes
 
