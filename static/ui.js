@@ -17666,7 +17666,18 @@ if(!S._expandedDirs) S._expandedDirs=new Set();
 if(!S._dirCache) S._dirCache={};
 
 function renderFileTree(){
-  const box=$('fileTree');box.innerHTML='';
+  const box=$('fileTree');
+  // #5657: capture the scroll position before wiping the container. box.innerHTML=''
+  // detaches every row, collapsing scrollHeight so the browser clamps scrollTop to 0;
+  // without this, every expand/collapse, breadcrumb nav, refresh, and hidden-files
+  // toggle that re-runs renderFileTree() teleports the reader back to the top of a
+  // long tree. Restored only after the normal render tail below — the two early-return
+  // paths (no-workspace hides the box; empty-dir has nothing to scroll) legitimately
+  // reset. A plain scrollTop restore suffices here: expand/collapse insert/remove rows
+  // BELOW the clicked disclosure, so the clicked row keeps its offset from the top (no
+  // getBoundingClientRect anchor delta needed — that's only for prepend-above cases).
+  const prevScrollTop=box?box.scrollTop:0;
+  box.innerHTML='';
   // Cache current dir entries
   S._dirCache[S.currentDir||'.']=S.entries;
   // Show empty-state when no workspace is set or the directory is empty (#703)
@@ -17685,6 +17696,8 @@ function renderFileTree(){
     return;
   }
   _renderTreeItems(box, visibleEntries, 0);
+  // #5657: restore the pre-wipe scroll position now that the tree is tall again.
+  if(box) box.scrollTop=prevScrollTop;
 }
 
 let _wsActiveDragPath=null;
