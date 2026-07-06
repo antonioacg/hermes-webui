@@ -84,9 +84,11 @@ function extractFunc(name) {
 # ---- realign guard (_restoreMessageViewportAnchor) -------------------------------
 
 def _realign_harness(*, anchor_extra: str, cur_scroll_height: int, rect_top: int,
-                     top_offset: int, active_intent: bool = False) -> str:
+                     top_offset: int, active_intent: bool = False,
+                     touch_like: bool = True) -> str:
     js = UI_JS_PATH.read_text(encoding="utf-8")
     intent_js = "true" if active_intent else "false"
+    touch_js = "true" if touch_like else "false"
     return _extract_func_script(js) + f"""
 let writes = [];
 let stTop = 90030;
@@ -101,6 +103,7 @@ const container = {{
 function $(id){{ return id === 'messages' ? container : null; }}
 function _recentMessageScrollIntent(){{ return {intent_js}; }}
 function _recentMessageTouchScrollIntent(){{ return {intent_js}; }}
+function _isTouchLikeMessageViewport(){{ return {touch_js}; }}
 let _programmaticScroll = false; let _programmaticScrollSetAt = 0;
 const performance = {{ now(){{ return 1; }} }};
 function _suppressBrowserOverflowAnchor(){{ return null; }}
@@ -151,12 +154,29 @@ def test_realign_backward_compatible_without_capture_geometry():
     assert m["returned"] is True and m["wrote"] == 1
 
 
+def test_realign_allows_on_desktop_no_native_anchor():
+    """Desktop regression (#5637 gate cert): the exact stale-anchor case
+    (content grew, no intent, delta -453) but on a hover+fine-pointer viewport where
+    `.messages` is `overflow-anchor:none`. There is no native anchoring layer to hold
+    the reader, so the guard MUST NOT refuse — the semantic scrollTop realign has to
+    run or the desktop reader is left unheld after above-viewport growth.
+    Mutation: drop the `_touchHold&&` term from the realign guard and this FAILS
+    (the write is wrongly refused on desktop)."""
+    m = json.loads(_run_node(_realign_harness(
+        anchor_extra="{scrollHeightAtCapture: 90000}",
+        cur_scroll_height=90453, rect_top=-453, top_offset=0, active_intent=False,
+        touch_like=False,
+    )))
+    assert m["returned"] is True and m["wrote"] == 1
+
+
 # ---- fallback guard (_restoreMessageScrollSnapshotSameFrame) ---------------------
 
 def _fallback_harness(*, snapshot_scroll_height, cur_scroll_height, snapshot_top,
-                      active_intent: bool = False) -> str:
+                      active_intent: bool = False, touch_like: bool = True) -> str:
     js = UI_JS_PATH.read_text(encoding="utf-8")
     intent_js = "true" if active_intent else "false"
+    touch_js = "true" if touch_like else "false"
     sh = "null" if snapshot_scroll_height is None else str(snapshot_scroll_height)
     return _extract_func_script(js) + f"""
 let writes = [];
@@ -168,6 +188,7 @@ const el = {{
 function $(id){{ return id === 'messages' ? el : null; }}
 function _recentMessageScrollIntent(){{ return {intent_js}; }}
 function _recentMessageTouchScrollIntent(){{ return {intent_js}; }}
+function _isTouchLikeMessageViewport(){{ return {touch_js}; }}
 // realign path fails (no anchor) so execution reaches the absolute fallback
 function _restorePinnedMessageScrollSnapshot(){{ return false; }}
 function _restoreMessageViewportAnchor(){{ return false; }}
@@ -230,4 +251,21 @@ def test_fallback_allows_snapshot_top_with_active_intent():
         active_intent=True,
     )))
     assert m["writes"] == [89577]
+
+
+def test_fallback_allows_snapshot_top_on_desktop_no_native_anchor():
+    """Desktop regression (#5637 gate cert): the exact stale-snapshot case (content grew,
+    reader not pinned, no intent, absolute write would move >8px) but on a
+    hover+fine-pointer viewport where `.messages` is `overflow-anchor:none`. With no
+    native anchoring layer to hold the reader, the fallback MUST keep its absolute
+    snapshot.top restore rather than refuse and latch userUnpinned — otherwise the
+    desktop reader is left at the wrong absolute position and force-unpinned.
+    Mutation: drop the `_fbTouchHold&&` term from the fallback guard and this FAILS
+    (the write is wrongly refused and userUnpinned is latched on desktop)."""
+    m = json.loads(_run_node(_fallback_harness(
+        snapshot_scroll_height=90000, cur_scroll_height=90453, snapshot_top=89577,
+        active_intent=False, touch_like=False,
+    )))
+    assert m["writes"] == [89577]
+    assert m["messageUserUnpinned"] is False and m["scrollPinned"] is True
 

@@ -983,6 +983,28 @@ function _browserOverflowAnchorActive(el){
   if(!el) return false;
   try{ return getComputedStyle(el).overflowAnchor==='auto'; }catch(_){ return false; }
 }
+// Stable touch-viewport predicate for the issue #5637 stale-anchor hold gate.
+// The two stale-anchor refusals below assume the browser's native overflow-anchor
+// layer will hold the viewport once the JS restore is refused. That layer is only
+// active where `.messages` computes to `overflow-anchor:auto` — touch viewports.
+// On hover+fine-pointer desktops the CSS keeps it `none`, so refusing the restore
+// leaves NOTHING to hold the reader (the desktop regression). We must NOT decide
+// "is this a touch viewport" with `_browserOverflowAnchorActive(#messages)` alone,
+// because `_restoreMessageViewportAnchor` temporarily writes an inline
+// `overflowAnchor:'none'` on #messages for its own scroll write and only restores
+// it on the next frame; when the realign fires every live tick that inline 'none'
+// persists across ticks, so a computed-value probe would read 'none' mid-realign
+// and wrongly classify a touch device as "desktop", letting the stale realign
+// through. A matchMedia('(pointer:coarse)') test reflects the input device and
+// cannot be mutated by that inline override, so it stays steady mid-realign;
+// desktop (fine pointer) stays false. Fall back to the computed-anchor probe when
+// matchMedia is unavailable.
+function _isTouchLikeMessageViewport(el){
+  try{
+    if(typeof matchMedia==='function' && matchMedia('(pointer:coarse)').matches) return true;
+  }catch(_){}
+  return _browserOverflowAnchorActive(el);
+}
 function _suppressBrowserOverflowAnchor(container){
   if(!container||!container.style) return null;
   // Only engage when the browser layer is actually active (auto). On desktop
@@ -1046,13 +1068,22 @@ function _restoreMessageViewportAnchor(anchor, rawIdxDelta){
   // scrollTop non-trivially, refuse it and let the browser overflow-anchor hold. An
   // actively scrolling reader (recent intent) keeps the legitimate realign; legacy
   // snapshots without the captured geometry keep prior behavior.
+  //
+  // Desktop guard (issue #5637 gate cert): the refusal is only safe where the
+  // browser's native overflow-anchor layer can actually hold the viewport, i.e.
+  // touch viewports where `.messages` computes to `overflow-anchor:auto`. On
+  // hover+fine-pointer desktops `.messages` is `overflow-anchor:none`, so refusing
+  // the realign would leave NOTHING to hold the reader after above-viewport growth
+  // — the very yank this fixes on mobile, reintroduced on desktop. Gate the refusal
+  // on `_isTouchLikeMessageViewport` so desktop keeps its semantic scrollTop realign.
   const _realignDelta=(rect.top-containerRect.top)-targetTop;
   const _shAtCap=Number(anchor.scrollHeightAtCapture);
   if(Number.isFinite(_shAtCap)){
     const _grewSinceCapture=(container.scrollHeight-_shAtCap)>4;
     const _activeIntent=(typeof _recentMessageScrollIntent==='function' && _recentMessageScrollIntent())
       || (typeof _recentMessageTouchScrollIntent==='function' && _recentMessageTouchScrollIntent());
-    if(_grewSinceCapture&&!_activeIntent&&Math.abs(_realignDelta)>8){
+    const _touchHold=(typeof _isTouchLikeMessageViewport==='function' && _isTouchLikeMessageViewport(container));
+    if(_touchHold&&_grewSinceCapture&&!_activeIntent&&Math.abs(_realignDelta)>8){
       return false;
     }
   }
@@ -13296,11 +13327,19 @@ function _restoreMessageScrollSnapshotSameFrame(snapshot){
     // scrollTop non-trivially, refuse it and let the browser overflow-anchor hold.
     // Pinned tail-followers (target is bottom-relative, not snapshot.top) are
     // unaffected; an actively scrolling reader has intent and keeps the restore.
+    //
+    // Desktop guard (issue #5637 gate cert): like the realign guard, this refusal
+    // only holds where the browser's native overflow-anchor layer is active (touch
+    // viewports, `.messages` computes to `overflow-anchor:auto`). Desktop `.messages`
+    // is `overflow-anchor:none`, so refusing the absolute fallback write there would
+    // leave the reader unheld AND latch `_messageUserUnpinned=true`. Gate on
+    // `_isTouchLikeMessageViewport` so desktop keeps its absolute snapshot.top restore.
     const _snapSH=Number(snapshot.scrollHeight);
     const _grewSinceSnap=Number.isFinite(_snapSH)&&_snapSH>0&&(el.scrollHeight-_snapSH)>4;
     const _fbActiveIntent=(typeof _recentMessageScrollIntent==='function' && _recentMessageScrollIntent())
       || (typeof _recentMessageTouchScrollIntent==='function' && _recentMessageTouchScrollIntent());
-    if(snapshot.pinned!==true && _grewSinceSnap && !_fbActiveIntent
+    const _fbTouchHold=(typeof _isTouchLikeMessageViewport==='function' && _isTouchLikeMessageViewport(el));
+    if(_fbTouchHold && snapshot.pinned!==true && _grewSinceSnap && !_fbActiveIntent
        && Math.abs((Math.max(0,Math.min(target,maxTop)))-el.scrollTop)>8){
       _lastScrollTop=el.scrollTop;_lastMessageClientHeight=el.clientHeight;
       _messageUserUnpinned=true;
