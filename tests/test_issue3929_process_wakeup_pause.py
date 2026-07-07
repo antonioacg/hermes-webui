@@ -567,6 +567,59 @@ def test_process_wakeup_pause_suppresses_custom_provider_tagged_model_session(tm
     assert saved.process_wakeup_pause["suppressed_count"] == 1
 
 
+def test_process_wakeup_pause_suppresses_custom_provider_single_segment_session(tmp_path, monkeypatch):
+    assert models._process_wakeup_pause_key(
+        "tag",
+        "custom:proxy",
+        "credential_pool_empty",
+    ) == models._process_wakeup_pause_key(
+        "@custom:proxy:tag",
+        None,
+        "credential_pool_empty",
+    )
+    session = Session(
+        session_id="wakeup_pause_custom_single_segment",
+        workspace=str(tmp_path),
+        model="@custom:proxy:tag",
+        model_provider=None,
+    )
+    pause = models.record_process_wakeup_provider_unavailable_pause(
+        session,
+        classification="credential_pool_empty",
+        model="tag",
+        provider="custom:proxy",
+    )
+    assert pause is not None
+    session.save()
+    models.SESSIONS[session.session_id] = session
+
+    def _unexpected_start_run(*_args, **_kwargs):
+        raise AssertionError("custom-provider shorthand wakeup must be suppressed on the paused lane")
+
+    monkeypatch.setattr(routes, "_resolve_chat_workspace_with_recovery", lambda _s, _w: str(tmp_path))
+    monkeypatch.setattr(routes, "_read_profile_model_config", lambda _s, _p: (None, None, {}))
+    monkeypatch.setattr(
+        routes,
+        "_resolve_compatible_session_model_state",
+        lambda *_args, **_kwargs: ("@custom:proxy:tag", None, False),
+    )
+    monkeypatch.setattr(routes, "_start_run", _unexpected_start_run)
+
+    response = routes.start_session_turn(
+        session.session_id,
+        "[IMPORTANT: Background process completed for custom shorthand lane.]",
+        source="process_wakeup",
+    )
+
+    assert response["_status"] == 409
+    assert response["error"] == PROCESS_WAKEUP_PAUSE_ERROR
+    saved = Session.load(session.session_id)
+    assert saved is not None
+    assert saved.process_wakeup_pause["model"] == "tag"
+    assert saved.process_wakeup_pause["provider"] == "custom:proxy"
+    assert saved.process_wakeup_pause["suppressed_count"] == 1
+
+
 def test_stale_credential_empty_process_wakeup_still_records_pause(tmp_path):
     session = Session(
         session_id="wakeup_pause_stale",
