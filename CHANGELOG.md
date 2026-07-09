@@ -5,6 +5,8 @@
 
 ### Fixed
 
+- **Workspace switcher is now navigable with a screen reader.** The workspace switcher exposes proper roles/labels and announces the "New Chat" workspace state transiently, and the closed workspace dropdown is kept out of screen-reader navigation so it isn't read while collapsed. Visual layout and click/keyboard behavior are unchanged. Thanks @rodboev. (#5721, #5671)
+
 - **A background child stream no longer bumps its parent session to the top of the sidebar.** When a child (branched/background) stream was active, its activity re-sorted the parent session's sidebar time-bucket, yanking the parent around while you were working elsewhere. The sidebar sort no longer keys the parent's bucket off child-stream activity, so parents stay put. Thanks @rodboev. (#5729, #5699)
 
 - **The embedded terminal now recovers from a dropped connection instead of silently freezing.** A transport-level failure on the terminal's output stream (session expired, gateway restarted, network drop) fired an EventSource `error` with no handler, so the terminal froze with no feedback. It now shows a "connection lost, reconnecting…" / "disconnected" line, lets the browser auto-reconnect a recoverable connection, and tears down a permanently-closed one so a restart can reconnect — notifying once per outage so a flapping connection can't flood the pane. Thanks @ai-ag2026. (#5786)
