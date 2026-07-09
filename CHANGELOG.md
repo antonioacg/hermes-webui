@@ -5,6 +5,8 @@
 
 ### Fixed
 
+- **The background-task completion drain thread can no longer spin at 100% CPU when the process registry is (re)initializing.** If the registry didn't yet expose its `completion_queue`, the drain loop's broad `except Exception: continue` swallowed the `AttributeError` and immediately retried with no delay — a hot loop. The loop now reads the queue defensively (`getattr(..., None)`) and backs off on the stop event when it's missing, catches `queue.Empty` separately as the normal idle path, and logs (no longer silently swallows) any unexpected queue error before backing off. No delivery latency is added — real completions are still drained on the 1 Hz blocking `get`. Thanks @ai-ag2026. (#5782, #2476, #4633)
+
 - **Passkey login no longer risks a hung or mis-framed response on keep-alive connections.** The passkey-login success `200` was written without a `Content-Length` header, so a client on a persistent connection could wait for a body boundary that never came or mis-frame the next response. The response now sends an explicit `Content-Length` matching the body's byte length. Thanks @ai-ag2026. (#5785)
 
 - **Zero-token turns (a pre-flight cancel or setup error) no longer leak a streaming-meter session.** The streaming meter's `begin_session()` and its 1 Hz ticker were started before the outer `try`, so a raise or cancel before the first token left the `_sessions[stream_id]` entry unreclaimed (`get_stats()` only prunes sessions that emitted a token), inflating the SSE `active` count over a long-lived server. `begin_session()` + the ticker start now live inside the outer `try` so the paired `end_session()` / ticker-stop teardown in the `finally` always runs. Thanks @ai-ag2026. (#5787, #4633, #2476)
