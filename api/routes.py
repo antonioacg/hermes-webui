@@ -11718,6 +11718,16 @@ def handle_get(handler, parsed) -> bool:
             settings["agent_version"] = AGENT_VERSION
         except Exception:
             pass
+        # Channel-scoped display badge — SEPARATE from webui_version (which is
+        # load-bearing for asset cache-busting / SW cache / skew detection and
+        # must stay channel-neutral). update_channel_version is display-only.
+        try:
+            from api.updates import channel_version_badge, _read_update_channel
+            channel = _read_update_channel()
+            settings["update_channel"] = channel
+            settings["update_channel_version"] = channel_version_badge(channel)
+        except Exception:
+            pass
         return j(handler, settings)
 
     if parsed.path == "/api/transcribe/capability":
@@ -13201,9 +13211,18 @@ def handle_post(handler, parsed) -> bool:
             return j(handler, {"disabled": True})
         include_agent_updates = not bool(settings.get("ignore_agent_updates"))
         force = bool(body.get("force", False))
+        # Allow the client to pass the channel explicitly in the POST body. This
+        # avoids a race on channel switch: the Settings dropdown re-checks
+        # immediately, but its autosave PUT (debounced) may not have landed
+        # server-side yet, so reading the saved setting here could answer for the
+        # OLD channel. An explicit body channel (validated against the enum) wins;
+        # otherwise fall back to the saved setting. (Fable UX gate.)
+        channel = body.get("channel") if isinstance(body, dict) else None
+        if channel not in ("stable", "experimental"):
+            channel = settings.get("update_channel")
         from api.updates import check_for_updates
 
-        return j(handler, check_for_updates(force=force, include_agent=include_agent_updates))
+        return j(handler, check_for_updates(force=force, include_agent=include_agent_updates, channel=channel))
 
     if parsed.path == "/api/extensions/toggle":
         from api.extensions import ExtensionToggleError, set_extension_user_enabled
@@ -15262,17 +15281,27 @@ def handle_post(handler, parsed) -> bool:
         target = body.get("target", "")
         if target not in ("webui", "agent"):
             return bad(handler, 'target must be "webui" or "agent"')
+        # Honor an explicit validated body channel (the client sends the channel
+        # the banner was offering) so a channel switch whose debounced autosave
+        # hasn't landed can't make apply read the OLD saved channel (Codex gate).
+        # Fall back to the saved setting when absent/invalid.
+        _apply_channel = body.get("channel") if isinstance(body, dict) else None
+        if _apply_channel not in ("stable", "experimental"):
+            _apply_channel = None
         from api.updates import apply_update
 
-        return j(handler, apply_update(target))
+        return j(handler, apply_update(target, _apply_channel))
 
     if parsed.path == "/api/updates/force":
         target = body.get("target", "")
         if target not in ("webui", "agent"):
             return bad(handler, 'target must be "webui" or "agent"')
+        _force_channel = body.get("channel") if isinstance(body, dict) else None
+        if _force_channel not in ("stable", "experimental"):
+            _force_channel = None
         from api.updates import apply_force_update
 
-        return j(handler, apply_force_update(target))
+        return j(handler, apply_force_update(target, _force_channel))
 
     if parsed.path == "/api/updates/clear_lock":
         # Manual-instruction recovery for the .git/index.lock case. The
@@ -15462,13 +15491,15 @@ def handle_post(handler, parsed) -> bool:
             _record_login_attempt(client_ip)
             return bad(handler, str(e), status=401)
         cookie_val = create_session()
+        body = json.dumps({"ok": True}).encode()
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
         handler.send_header("Cache-Control", "no-store")
         _security_headers(handler)
         set_auth_cookie(handler, cookie_val)
         handler.end_headers()
-        handler.wfile.write(json.dumps({"ok": True}).encode())
+        handler.wfile.write(body)
         return True
 
     if parsed.path == "/api/auth/passkey/register/options":
@@ -18676,7 +18707,11 @@ def _handle_live_models(handler, parsed):
         # Normalise to {id, label} — provider_model_ids() returns plain string IDs.
         # For ollama-cloud use the shared Ollama formatter (handles `:variant` suffix).
         # For all other providers use a simpler hyphen-split capitaliser.
-        from api.config import _format_ollama_label as _fmt_ollama
+        from api.config import (
+            _format_ollama_label as _fmt_ollama,
+            _is_openai_family_provider as _is_fast_tier_provider,
+            _model_supports_fast_tier_for_provider,
+        )
 
         def _make_label(mid):
             """Best-effort human label from a model ID string."""
@@ -18703,7 +18738,15 @@ def _handle_live_models(handler, parsed):
                 label = label.replace(orig.title(), orig)
             return label
 
-        models_out = [{"id": mid, "label": _make_label(mid)} for mid in ids if mid]
+        annotate_fast_tier = _is_fast_tier_provider(provider)
+        models_out = []
+        for mid in ids:
+            if not mid:
+                continue
+            entry = {"id": mid, "label": _make_label(mid)}
+            if annotate_fast_tier:
+                entry["supports_fast_tier"] = _model_supports_fast_tier_for_provider(mid, provider)
+            models_out.append(entry)
         return _finish({"provider": provider, "models": models_out,
                         "count": len(models_out)})
 

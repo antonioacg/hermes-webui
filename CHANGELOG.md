@@ -3,7 +3,41 @@
 
 ## [Unreleased]
 
+### Internal
+
+- **Documented the lock-free GIL-atomic contract for the streaming `STREAM_*` buffers.** Added an in-code explanation of why the per-token hot path mirrors partial-text/reasoning/tool-call buffers without holding `STREAMS_LOCK` (single writer + GIL-atomic `STORE_SUBSCR` on immutable strings → readers see complete-but-possibly-stale values, never torn), and why snapshot readers do take the lock. No behavior change. Thanks @ai-ag2026. (#5800)
+
 ### Fixed
+
+- **The background-wakeup status-row label is now localized.** The "Background wakeup" label introduced with the wakeup status row (#5766) was hardcoded English; it now resolves through `t('process_wakeup_label')`, with translations in all 15 locales. Thanks @Isla-Liu. (#5768)
+
+- **Concurrent remote-gateway health checks no longer stampede the gateway.** When many requests needed a remote-gateway health probe at once, each fired its own probe (a thundering herd). Probes are now single-flighted: one "leader" thread probes while latecomers wait (bounded) and share the result, guarded by a single condition/lock with a `finally` that always releases waiters even if the probe errors. Thanks @ai-ag2026. (#5798, #5455)
+
+- **Appending run-journal events no longer gets slower as a session's journal grows.** The next sequence number was recomputed by scanning existing entries on every append (O(n²) over a session's lifetime); it's now cached per journal path (guarded by a dedicated lock, evicted on journal delete), making each append O(1). Thanks @ai-ag2026. (#5799)
+
+- **The login page's connectivity retry timer is now cleared correctly.** The retry poller is started with `setInterval` but was cleared with `clearTimeout`, so once the server came back the interval kept firing (a zombie timer) instead of stopping and reloading once. It now uses `clearInterval`. Thanks @ai-ag2026. (#5801)
+
+- **A background wakeup no longer eats the assistant reply that preceded it.** When a background-process wakeup prompt arrived after an assistant response, the response could disappear from the interactive transcript (it remained in the DB and export). Background wakeups now render as their own distinct "Background wakeup" status row aligned to the message rail — with attachment support — leaving the prior reply intact. Thanks @Isla-Liu. (#5766)
+
+- **Service-tier (fast-mode) support is now derived from the agent's model metadata instead of a hardcoded list.** The service-tier control appears for a model only when the agent reports it supports the fast tier, so newly-supported models light up automatically and unsupported ones don't show a dead control. Falls back safely (no control) when the metadata is absent. Thanks @starship-s. (#5762, #4536)
+
+- **Live reasoning no longer briefly renders twice while a reply streams.** The streaming path updated the reasoning display through two renderers at once (the anchored reasoning block and the live thinking card), which could momentarily show the reasoning twice. It now routes through a single renderer — the live thinking card only updates when the anchored path didn't handle it. Thanks @rodboev. (#5773, #5720)
+
+- **A wide or tall code block in the chat no longer thrashes the surrounding layout while a reply streams.** Code blocks now use CSS `contain: content`, so a growing/overflowing `<pre>` is isolated to its own rounded container (with its own horizontal scroll) instead of reflowing the message column during streaming. Thanks @rodboev. (#5770, #5760)
+
+- **Workspace switcher is now navigable with a screen reader.** The workspace switcher exposes proper roles/labels and announces the "New Chat" workspace state transiently, and the closed workspace dropdown is kept out of screen-reader navigation so it isn't read while collapsed. Visual layout and click/keyboard behavior are unchanged. Thanks @rodboev. (#5721, #5671)
+
+- **A background child stream no longer bumps its parent session to the top of the sidebar.** When a child (branched/background) stream was active, its activity re-sorted the parent session's sidebar time-bucket, yanking the parent around while you were working elsewhere. The sidebar sort no longer keys the parent's bucket off child-stream activity, so parents stay put. Thanks @rodboev. (#5729, #5699)
+
+- **The embedded terminal now recovers from a dropped connection instead of silently freezing.** A transport-level failure on the terminal's output stream (session expired, gateway restarted, network drop) fired an EventSource `error` with no handler, so the terminal froze with no feedback. It now shows a "connection lost, reconnecting…" / "disconnected" line, lets the browser auto-reconnect a recoverable connection, and tears down a permanently-closed one so a restart can reconnect — notifying once per outage so a flapping connection can't flood the pane. Thanks @ai-ag2026. (#5786)
+
+- **The OpenCode Go model picker now lists the current flat-rate catalog.** The static `opencode-go` model snapshot was stale; it's been re-synced from the public opencode.ai/go docs + models endpoint (adds MiniMax M3, Kimi K2.7 Code, GLM-5.2, Qwen 3.7 Max/Plus, and more), keeping preview/free-only Zen models out of the Go picker. Thanks @ai-ag2026. (#5761)
+
+- **The background-task completion drain thread can no longer spin at 100% CPU when the process registry is (re)initializing.** If the registry didn't yet expose its `completion_queue`, the drain loop's broad `except Exception: continue` swallowed the `AttributeError` and immediately retried with no delay — a hot loop. The loop now reads the queue defensively (`getattr(..., None)`) and backs off on the stop event when it's missing, catches `queue.Empty` separately as the normal idle path, and logs (no longer silently swallows) any unexpected queue error before backing off. No delivery latency is added — real completions are still drained on the 1 Hz blocking `get`. Thanks @ai-ag2026. (#5782, #2476, #4633)
+
+- **Passkey login no longer risks a hung or mis-framed response on keep-alive connections.** The passkey-login success `200` was written without a `Content-Length` header, so a client on a persistent connection could wait for a body boundary that never came or mis-frame the next response. The response now sends an explicit `Content-Length` matching the body's byte length. Thanks @ai-ag2026. (#5785)
+
+- **Zero-token turns (a pre-flight cancel or setup error) no longer leak a streaming-meter session.** The streaming meter's `begin_session()` and its 1 Hz ticker were started before the outer `try`, so a raise or cancel before the first token left the `_sessions[stream_id]` entry unreclaimed (`get_stats()` only prunes sessions that emitted a token), inflating the SSE `active` count over a long-lived server. `begin_session()` + the ticker start now live inside the outer `try` so the paired `end_session()` / ticker-stop teardown in the `finally` always runs. Thanks @ai-ag2026. (#5787, #4633, #2476)
 
 - **Deleting a session now evicts its run-journal writer locks instead of leaking them.** The per-run-journal writer-lock cache (`_WRITER_LOCKS`) kept an entry after a session's journal was deleted, so the cache grew unbounded, and a later journal reusing the same path could be handed a stale lock. `delete_run_journal` now evicts that session's lock-cache entries — but only after confirming the directory was actually removed, so a Windows/permission transient that leaves files (locks still live) never has its lock wrongly dropped out from under a writer. Thanks @ai-ag2026. (#5784)
 
