@@ -9890,6 +9890,7 @@ def _run_agent_streaming(
             err_str = _stripped
         _exc_lower = err_str.lower()
         _classification = _classify_provider_error(err_str, e)
+        _exc_is_credential_pool_empty = _classification['type'] == 'credential_pool_empty'
         if cancel_event.is_set():
             if s is not None:
                 if _checkpoint_stop is not None:
@@ -9898,6 +9899,17 @@ def _run_agent_streaming(
                     _ckpt_thread.join(timeout=15)
                 _lock_ctx = _agent_lock if _agent_lock is not None else contextlib.nullcontext()
                 with _lock_ctx:
+                    if (
+                        not ephemeral
+                        and _turn_pending_source == 'process_wakeup'
+                        and _exc_is_credential_pool_empty
+                    ):
+                        record_process_wakeup_provider_unavailable_pause(
+                            s,
+                            classification=_classification['type'],
+                            model=_turn_route_model,
+                            provider=_turn_route_provider,
+                        )
                     _finalize_cancelled_turn(s, ephemeral=ephemeral)
                     if not ephemeral:
                         try:
@@ -9915,7 +9927,6 @@ def _run_agent_streaming(
             put('cancel', _cancel_event_payload('Cancelled by user'))
             return
         _exc_is_quota = _classification['type'] == 'quota_exhausted'
-        _exc_is_credential_pool_empty = _classification['type'] == 'credential_pool_empty'
         # Exception quota text still includes: 'more credits' in _exc_lower, 'can only afford' in _exc_lower, 'fewer max_tokens' in _exc_lower.
         # Rate-limit detection remains guarded as: (not _exc_is_quota).
         _exc_is_rate_limit = (_classification['type'] == 'rate_limit') and (not _exc_is_quota)

@@ -311,6 +311,84 @@ def test_credential_empty_process_wakeup_pauses_repeated_automatic_turns(tmp_pat
     assert "last_suppressed_at" in saved_after.process_wakeup_pause
 
 
+def test_cancelled_stale_process_wakeup_credential_failure_records_pause(tmp_path, monkeypatch):
+    stream_id = "stream-cancelled-stale-wakeup"
+    session = Session(
+        session_id="cancelled_stale_wakeup_pause",
+        title="Cancelled stale wakeup pause",
+        workspace=str(tmp_path),
+        model="test-model",
+        model_provider="test-provider",
+        messages=[{"role": "user", "content": "Earlier prompt", "timestamp": 1}],
+        context_messages=[{"role": "user", "content": "Earlier prompt"}],
+        active_stream_id=stream_id,
+        pending_user_message="[IMPORTANT: Background process first completed.]",
+        pending_started_at=1234.0,
+        pending_user_source="process_wakeup",
+    )
+    session.save()
+    models.SESSIONS[session.session_id] = session
+    fake_queue = queue.Queue()
+    streaming.STREAMS[stream_id] = fake_queue
+    config.STREAM_PARTIAL_TEXT[stream_id] = ""
+
+    class _CancelledStaleCredentialPoolEmptyAgent(_MockAgent):
+        def run_conversation(self, **_kwargs):
+            cancel_flag = config.CANCEL_FLAGS.get(stream_id)
+            assert cancel_flag is not None
+            cancel_flag.set()
+            stale_session = models.SESSIONS[self.session_id]
+            stale_session.active_stream_id = "stream-newer-run"
+            stale_session.save(touch_updated_at=False)
+            raise RuntimeError("All 0 credential(s) exhausted for test-provider")
+
+    with mock.patch.object(streaming, "_get_ai_agent", return_value=_CancelledStaleCredentialPoolEmptyAgent), \
+         mock.patch.object(streaming, "resolve_model_provider", return_value=("test-model", "test-provider", None)), \
+         mock.patch("api.config._resolve_cli_toolsets", return_value=[]):
+        streaming._run_agent_streaming(
+            session_id=session.session_id,
+            msg_text=session.pending_user_message,
+            model="test-model",
+            model_provider="test-provider",
+            workspace=str(tmp_path),
+            stream_id=stream_id,
+        )
+
+    events = [(item[0], item[1]) for item in list(fake_queue.queue)]
+    assert any(event == "cancel" for event, _data in events)
+    assert not any(event == "apperror" and data["type"] == "credential_pool_empty" for event, data in events)
+    saved = Session.load(session.session_id)
+    assert saved is not None
+    assert saved.process_wakeup_pause["paused"] is True
+    assert saved.process_wakeup_pause["classification"] == "credential_pool_empty"
+    assert saved.process_wakeup_pause["model"] == "test-model"
+    assert saved.process_wakeup_pause["provider"] == "test-provider"
+    assert saved.process_wakeup_pause["suppressed_count"] == 0
+
+    def _unexpected_start_run(*_args, **_kwargs):
+        raise AssertionError("cancelled stale process_wakeup pause must suppress the next automatic wakeup")
+
+    _patch_process_wakeup_route(
+        monkeypatch,
+        tmp_path,
+        model="test-model",
+        provider="test-provider",
+    )
+    monkeypatch.setattr(routes, "_start_run", _unexpected_start_run)
+
+    response = routes.start_session_turn(
+        session.session_id,
+        "[IMPORTANT: Background process second completed.]",
+        source="process_wakeup",
+    )
+
+    assert response["_status"] == 409
+    assert response["error"] == PROCESS_WAKEUP_PAUSE_ERROR
+    saved_after = Session.load(session.session_id)
+    assert saved_after is not None
+    assert saved_after.process_wakeup_pause["suppressed_count"] == 1
+
+
 def test_process_wakeup_pause_revalidates_when_credential_state_changes(tmp_path, monkeypatch):
     hermes_home = tmp_path / "hermes-home"
     hermes_home.mkdir()
