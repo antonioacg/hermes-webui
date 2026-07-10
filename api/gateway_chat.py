@@ -620,8 +620,10 @@ def _run_gateway_chat_streaming(
         STREAM_REASONING_TEXT[stream_id] = ""
         STREAM_LIVE_TOOL_CALLS[stream_id] = []
 
+    success_writeback_committed = False
+
     def put_gateway_event(event, data):
-        if cancel_event.is_set() and event not in ("cancel", "error", "apperror"):
+        if cancel_event.is_set() and not success_writeback_committed and event not in ("cancel", "error", "apperror"):
             return
         event_id = None
         if run_journal is not None:
@@ -1012,6 +1014,7 @@ def _run_gateway_chat_streaming(
             if cancel_event.is_set():
                 _restore_cancelled_success_writeback()
                 return
+            success_writeback_committed = True
         try:
             from api.goals import evaluate_goal_after_turn, has_active_goal
             from api.profiles import get_hermes_home_for_profile

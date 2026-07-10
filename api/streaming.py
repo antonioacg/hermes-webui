@@ -6889,9 +6889,11 @@ def _run_agent_streaming(
 
     _metering_thread = threading.Thread(target=_metering_ticker, daemon=True)
 
+    _success_writeback_committed = False
+
     def put(event, data):
         # If cancelled, drop all further events except the cancel event itself
-        if cancel_event.is_set() and event not in ('cancel', 'error'):
+        if cancel_event.is_set() and not _success_writeback_committed and event not in ('cancel', 'error'):
             return
         event_id = None
         if run_journal is not None:
@@ -9518,9 +9520,8 @@ def _run_agent_streaming(
                     return
                 try:
                     _latest_pause_owner = get_session(getattr(s, 'session_id', session_id))
-                    s.process_wakeup_pause = dict(
-                        getattr(_latest_pause_owner, 'process_wakeup_pause', {}) or {}
-                    )
+                    if _latest_pause_owner is not None:
+                        s = _latest_pause_owner
                 except Exception:
                     logger.debug(
                         "Failed to re-read process wakeup pause before success clear",
@@ -9572,6 +9573,7 @@ def _run_agent_streaming(
                             logger.debug("Failed to append cancelled turn journal event", exc_info=True)
                         put('cancel', _cancel_event_payload('Cancelled by user'))
                         return
+                    _success_writeback_committed = True
             usage = {
                 'input_tokens': input_tokens,
                 'output_tokens': output_tokens,

@@ -927,6 +927,91 @@ def test_streaming_success_pause_clear_serializes_against_concurrent_suppression
     assert saved.process_wakeup_pause == {}
 
 
+def test_streaming_success_pause_clear_preserves_concurrent_session_update(tmp_path, monkeypatch):
+    stream_id = "streaming-pause-clear-preserves-rename"
+    session_id = "streaming_pause_clear_preserves_rename"
+    stream_queue = queue.Queue()
+    config.STREAMS[stream_id] = stream_queue
+    previous_pause = {
+        "paused": True,
+        "model": "test-model",
+        "provider": "test-provider",
+        "classification": "credential_pool_empty",
+        "first_paused_at": 1.0,
+        "last_visible_error_at": 1.0,
+        "visible_error_count": 1,
+        "suppressed_count": 2,
+        "credential_state_fingerprint": "fingerprint-before",
+    }
+    session = Session(
+        session_id=session_id,
+        title="Original title",
+        workspace=str(tmp_path),
+        model="test-model",
+        model_provider="test-provider",
+        messages=[{"role": "user", "content": "before", "timestamp": 1.0}],
+        context_messages=[{"role": "user", "content": "before"}],
+        active_stream_id=stream_id,
+        pending_user_message="recover",
+        pending_user_source="process_wakeup",
+        process_wakeup_pause=dict(previous_pause),
+    )
+    session.save()
+    models.SESSIONS[session_id] = session
+
+    original_save = Session.save
+    original_get_session = streaming.get_session
+    state = {"success_saved": False, "renamed": False}
+
+    def _save_and_mark_success_snapshot(self, *args, **kwargs):
+        result = original_save(self, *args, **kwargs)
+        if (
+            getattr(self, "session_id", None) == session_id
+            and getattr(self, "active_stream_id", None) is None
+            and any(
+                msg.get("role") == "assistant" and msg.get("content") == "Stream reply"
+                for msg in (getattr(self, "messages", None) or [])
+            )
+        ):
+            state["success_saved"] = True
+        return result
+
+    def _get_session_after_concurrent_rename(sid, *args, **kwargs):
+        if sid == session_id and state["success_saved"] and not state["renamed"]:
+            latest = Session.load(session_id)
+            assert latest is not None
+            latest.title = "Renamed during settle"
+            original_save(latest, touch_updated_at=False)
+            with models.LOCK:
+                models.SESSIONS.pop(session_id, None)
+            state["renamed"] = True
+        return original_get_session(sid, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "save", _save_and_mark_success_snapshot)
+    monkeypatch.setattr(streaming, "get_session", _get_session_after_concurrent_rename)
+
+    with mock.patch.object(streaming, "_get_ai_agent", return_value=_SuccessfulAgent), \
+         mock.patch.object(streaming, "resolve_model_provider", return_value=("test-model", "test-provider", None)), \
+         mock.patch("api.config._resolve_cli_toolsets", return_value=[]):
+        streaming._run_agent_streaming(
+            session_id=session.session_id,
+            msg_text=session.pending_user_message,
+            model="test-model",
+            model_provider="test-provider",
+            workspace=str(tmp_path),
+            stream_id=stream_id,
+        )
+
+    assert state == {"success_saved": True, "renamed": True}
+    saved = Session.load(session_id)
+    assert saved is not None
+    assert saved.title == "Renamed during settle"
+    assert saved.process_wakeup_pause == {}
+    done_payloads = [item[1] for item in list(stream_queue.queue) if item[0] == "done"]
+    assert done_payloads
+    assert done_payloads[-1]["session"]["title"] == "Renamed during settle"
+
+
 def test_process_wakeup_pause_survives_rotation_style_auth_rewrite(tmp_path, monkeypatch):
     hermes_home = tmp_path / "hermes-home"
     hermes_home.mkdir()
@@ -2092,6 +2177,91 @@ def test_gateway_late_cancel_preserves_existing_pause_for_webui_recovery(tmp_pat
     assert "done" not in queued_events
 
 
+def test_gateway_post_save_cancel_after_success_commit_emits_done(tmp_path, monkeypatch):
+    stream_id = "gateway-post-save-success-cancel-stream"
+    session_id = "gateway_post_save_success_cancel"
+    stream_queue = queue.Queue()
+    config.STREAMS[stream_id] = stream_queue
+    monkeypatch.setattr(gateway_chat, "RunJournalWriter", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gateway_chat, "gateway_approval_unavailable_reason", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(config, "get_config", lambda: {"webui_gateway_base_url": "http://gateway.test"})
+
+    class _GatewayResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def __iter__(self):
+            payload = {"choices": [{"delta": {"content": "Gateway success reply"}}]}
+            return iter([
+                ("data: " + json.dumps(payload) + "\n").encode("utf-8"),
+                b"data: [DONE]\n",
+            ])
+
+    monkeypatch.setattr(
+        gateway_chat.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _GatewayResponse(),
+    )
+
+    previous_pause = {
+        "paused": True,
+        "model": "claude-sonnet-test",
+        "provider": "test-provider",
+        "classification": "credential_pool_empty",
+        "first_paused_at": 1.0,
+        "last_visible_error_at": 1.0,
+        "visible_error_count": 1,
+        "suppressed_count": 2,
+        "credential_state_fingerprint": "fingerprint-before",
+    }
+    previous_messages = [{"role": "user", "content": "before", "timestamp": 1.0}]
+    session = Session(
+        session_id=session_id,
+        workspace=str(tmp_path),
+        model="claude-sonnet-test",
+        model_provider="test-provider",
+        messages=list(previous_messages),
+        context_messages=list(previous_messages),
+        active_stream_id=stream_id,
+        pending_user_message="try recovery",
+        pending_user_source="webui",
+        process_wakeup_pause=dict(previous_pause),
+    )
+    session.save()
+    models.SESSIONS[session_id] = session
+
+    original_payload = streaming._session_payload_with_full_messages
+    payload_calls = {"count": 0}
+
+    def _payload_and_cancel_after_success_commit(*args, **kwargs):
+        payload_calls["count"] += 1
+        config.CANCEL_FLAGS[stream_id].set()
+        return original_payload(*args, **kwargs)
+
+    monkeypatch.setattr(streaming, "_session_payload_with_full_messages", _payload_and_cancel_after_success_commit)
+
+    gateway_chat._run_gateway_chat_streaming(
+        session_id,
+        "try recovery",
+        "claude-sonnet-test",
+        str(tmp_path),
+        stream_id,
+        model_provider="test-provider",
+    )
+
+    assert payload_calls["count"] >= 1
+    saved = Session.load(session_id)
+    assert saved is not None
+    assert saved.process_wakeup_pause == {}
+    queued_events = [item[0] for item in list(stream_queue.queue)]
+    assert "done" in queued_events
+    assert "stream_end" in queued_events
+    assert "cancel" not in queued_events
+
+
 def test_streaming_late_cancel_after_pause_clear_save_persists_restored_pause(tmp_path, monkeypatch):
     stream_id = "streaming-pause-clear-save-cancel"
     session_id = "streaming_pause_clear_save_cancel"
@@ -2162,6 +2332,70 @@ def test_streaming_late_cancel_after_pause_clear_save_persists_restored_pause(tm
     queued_events = [item[0] for item in list(stream_queue.queue)]
     assert "cancel" in queued_events
     assert "done" not in queued_events
+
+
+def test_streaming_post_save_cancel_after_success_commit_emits_done(tmp_path, monkeypatch):
+    stream_id = "streaming-pause-clear-post-save-cancel"
+    session_id = "streaming_pause_clear_post_save_cancel"
+    stream_queue = queue.Queue()
+    config.STREAMS[stream_id] = stream_queue
+
+    previous_pause = {
+        "paused": True,
+        "model": "test-model",
+        "provider": "test-provider",
+        "classification": "credential_pool_empty",
+        "first_paused_at": 1.0,
+        "last_visible_error_at": 1.0,
+        "visible_error_count": 1,
+        "suppressed_count": 3,
+        "credential_state_fingerprint": "fingerprint-before",
+    }
+    previous_messages = [{"role": "user", "content": "before", "timestamp": 1.0}]
+    session = Session(
+        session_id=session_id,
+        workspace=str(tmp_path),
+        model="test-model",
+        model_provider="test-provider",
+        messages=list(previous_messages),
+        context_messages=list(previous_messages),
+        active_stream_id=stream_id,
+        pending_user_message="wake up",
+        pending_user_source="process_wakeup",
+        process_wakeup_pause=dict(previous_pause),
+    )
+    session.save()
+    models.SESSIONS[session_id] = session
+
+    original_payload = streaming._session_payload_with_full_messages
+    payload_calls = {"count": 0}
+
+    def _payload_and_cancel_after_success_commit(*args, **kwargs):
+        payload_calls["count"] += 1
+        config.CANCEL_FLAGS[stream_id].set()
+        return original_payload(*args, **kwargs)
+
+    monkeypatch.setattr(streaming, "_session_payload_with_full_messages", _payload_and_cancel_after_success_commit)
+
+    with mock.patch.object(streaming, "_get_ai_agent", return_value=_SuccessfulAgent), \
+         mock.patch.object(streaming, "resolve_model_provider", return_value=("test-model", "test-provider", None)), \
+         mock.patch("api.config._resolve_cli_toolsets", return_value=[]):
+        streaming._run_agent_streaming(
+            session_id=session.session_id,
+            msg_text=session.pending_user_message,
+            model="test-model",
+            model_provider="test-provider",
+            workspace=str(tmp_path),
+            stream_id=stream_id,
+        )
+
+    assert payload_calls["count"] >= 1
+    saved = Session.load(session_id)
+    assert saved is not None
+    assert saved.process_wakeup_pause == {}
+    queued_events = [item[0] for item in list(stream_queue.queue)]
+    assert "done" in queued_events
+    assert "cancel" not in queued_events
 
 
 def test_stale_credential_empty_process_wakeup_still_records_pause(tmp_path):
