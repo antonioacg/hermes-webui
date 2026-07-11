@@ -612,9 +612,22 @@ function _syncSessionListSnapshotOnVisit(sid, messageCount, lastMessageAt) {
   const count = Number(messageCount || 0);
   const last = Number(lastMessageAt || 0);
   _sessionListSnapshotById.set(sid, {message_count: count, last_message_at: last});
+  // #5917 gate finding: derive the visited session's streaming state from its
+  // OWN (target-owned) metadata, NOT the global S.busy / S.activeStreamId
+  // flags. When switching from a BUSY session A to an IDLE session B, those
+  // globals can still belong to A at this point in the load, so reading them
+  // here would wrongly record idle B as streaming — a later hidden-tab poll
+  // would then see a streaming->stopped transition and manufacture a phantom
+  // unread completion for B. Only the session object's own is_streaming /
+  // active_stream_id / pending-message fields describe THIS session.
+  const target = (S.session && S.session.session_id === sid) ? S.session : null;
   const isStreaming = Boolean(
-    S.session && S.session.session_id === sid
-    && (S.busy || S.activeStreamId || (S.session.active_stream_id && S.session.pending_user_message))
+    target && (
+      target.is_streaming ||
+      target.active_stream_id ||
+      target.pending_user_message ||
+      target.has_pending_user_message
+    )
   );
   _sessionStreamingById.set(sid, isStreaming);
   if (!isStreaming) _forgetObservedStreamingSession(sid);
@@ -2926,7 +2939,15 @@ async function _ensureMessagesLoaded(sid, opts) {
     if(typeof scheduleTodosRefresh === 'function'){
       scheduleTodosRefresh();
     }
-    _setSessionViewedCount(sid, Number(S.session.message_count || msgs.length));
+    // Only sync the viewed count (which also clears any completion-unread
+    // marker via _setSessionViewedCount -> _clearSessionCompletionUnread)
+    // when the session is STILL actively viewed. A hidden-tab completion that
+    // lands during the awaited message fetch above must NOT be silently marked
+    // read here — mirror the same _isSessionActivelyViewedForList(sid) guard
+    // used on the post-load re-ack in loadSession(). (#5917 gate finding)
+    if(typeof _isSessionActivelyViewedForList !== 'function' || _isSessionActivelyViewedForList(sid)){
+      _setSessionViewedCount(sid, Number(S.session.message_count || msgs.length));
+    }
     if(typeof syncTopbar==='function') syncTopbar();
   }
 }

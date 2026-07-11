@@ -297,3 +297,150 @@ console.log(JSON.stringify({{flagged}}));
         "a deferred list poll after a visit must not re-flag the open, unchanged "
         "session as unread — the visit-ack synced snapshot + viewed count"
     )
+
+
+# ── Functional: hidden-tab completion during message load stays unread ───────
+
+def _extract_async(name: str) -> str:
+    """Like _extract, but preserve an `async` prefix so `await` bodies stay valid."""
+    body = _extract(name)
+    idx = SESSIONS_JS.rindex("async ", 0, SESSIONS_JS.index(body))
+    # Only treat it as async if the `async ` keyword immediately precedes it.
+    if SESSIONS_JS[idx:idx + len("async ")] == "async " and \
+       SESSIONS_JS[idx:].startswith("async function " + name):
+        return "async " + body
+    return body
+
+
+def _hidden_completion_script(*, hidden: bool) -> str:
+    """Build a Node harness that drives the REAL _ensureMessagesLoaded() through a
+    delayed messages fetch, marks a completion mid-fetch, and reports whether the
+    completion-unread marker survives."""
+    ensure = _extract_async("_ensureMessagesLoaded")
+    set_viewed = _extract("_setSessionViewedCount")
+    clear_unread = _extract("_clearSessionCompletionUnread")
+    get_unread = _extract("_getSessionCompletionUnread")
+    save_unread = _extract("_saveSessionCompletionUnread")
+    mark_unread = _extract("_markSessionCompletionUnread")
+    get_counts = _extract("_getSessionViewedCounts")
+    save_counts = _extract("_saveSessionViewedCounts")
+    actively_viewed = _extract("_isSessionActivelyViewedForList")
+
+    visibility = "'hidden'" if hidden else "'visible'"
+    has_focus = "false" if hidden else "true"
+
+    return f"""
+// Minimal localStorage shim.
+const _store = {{}};
+const localStorage = {{
+  getItem: (k) => (k in _store ? _store[k] : null),
+  setItem: (k, v) => {{ _store[k] = String(v); }},
+}};
+const SESSION_VIEWED_COUNTS_KEY = 'v';
+const SESSION_COMPLETION_UNREAD_KEY = 'u';
+let _sessionViewedCounts = null;
+let _sessionCompletionUnread = null;
+let _messagesTruncated = false;
+let _oldestIdx = 0;
+let _messageRenderWindowSize = 0;
+let _pendingCarryForwardSnapshot = null;
+let _loadingSessionId = 'open';
+let _loadSessionGeneration = 0;
+const window = {{}};
+// Tab starts VISIBLE+FOCUSED: the load begins while the user is watching.
+let _visibility = 'visible';
+let _focused = true;
+const document = {{
+  get visibilityState() {{ return _visibility; }},
+  hasFocus: () => _focused,
+}};
+let S = {{ session: {{ session_id: 'open', message_count: 0 }}, messages: [], lastUsage: {{}} }};
+
+// Stubs for the incidental side effects _ensureMessagesLoaded touches.
+function _clearSameSessionForceReloadHint() {{}}
+function _messageReloadLimitForSession() {{ return 0; }}
+function _syncToolCallsForLoadedMessages() {{}}
+function clearLiveToolCards() {{}}
+
+// Delayed messages fetch: resolves only when we release it, simulating a slow
+// /api/session?messages=1 response that spans the tab going hidden.
+let _releaseApi;
+const _apiResult = new Promise((res) => {{ _releaseApi = res; }});
+let _apiCalled = false;
+async function api(url) {{ _apiCalled = true; return _apiResult; }}
+
+{get_counts}
+{save_counts}
+{get_unread}
+{save_unread}
+{clear_unread}
+{mark_unread}
+{set_viewed}
+{actively_viewed}
+{ensure}
+
+function _hasMarker() {{
+  return Object.prototype.hasOwnProperty.call(_getSessionCompletionUnread(), 'open');
+}}
+
+(async () => {{
+  const p = _ensureMessagesLoaded('open', {{}});
+  // Let the synchronous body run up to `await api(...)`.
+  await Promise.resolve();
+  await Promise.resolve();
+  const apiIssued = _apiCalled;
+  // Mid-fetch: the tab's visibility/focus flips to the test scenario and a
+  // background completion lands, marking the session unread.
+  _visibility = {visibility};
+  _focused = {has_focus};
+  _markSessionCompletionUnread('open', 6);
+  const markerBefore = _hasMarker();
+  // The delayed messages response finally arrives and the load finishes.
+  _releaseApi({{ session: {{ session_id: 'open', message_count: 6, messages: [{{ role: 'assistant', content: 'x' }}] }} }});
+  await p;
+  const markerAfter = _hasMarker();
+  const viewed = _getSessionViewedCounts()['open'];
+  console.log(JSON.stringify({{
+    apiIssued,
+    markerBefore,
+    markerAfter,
+    viewed: viewed === undefined ? null : viewed,
+  }}));
+}})();
+"""
+
+
+def test_hidden_tab_completion_during_message_load_survives():
+    """#5917 gate finding (SILENT): a completion that lands while the tab is
+    hidden DURING the awaited message fetch inside _ensureMessagesLoaded() must
+    NOT be silently marked read. The guarded viewed-count clear must skip when
+    the session is no longer actively viewed."""
+    out = _run_node(_hidden_completion_script(hidden=True))
+    assert out["apiIssued"] is True, "precondition: the delayed messages fetch was issued"
+    assert out["markerBefore"] is True, "precondition: the mid-fetch completion marked the session unread"
+    assert out["markerAfter"] is True, (
+        "a hidden-tab completion landing during the awaited message fetch must "
+        "SURVIVE — _ensureMessagesLoaded() must not clear the unread marker via "
+        "an unconditional _setSessionViewedCount when the tab is not actively viewing"
+    )
+    assert out["viewed"] is None, (
+        "the viewed count must NOT be synced for a hidden/background session, "
+        "otherwise the completion-unread marker would be cleared"
+    )
+
+
+def test_visible_tab_message_load_still_syncs_viewed_count():
+    """Control: the guard must not over-block. An ACTIVELY-viewed session still
+    updates its viewed count normally through the message-load path (clearing any
+    marker), so the fix is scoped to hidden/background sessions only."""
+    out = _run_node(_hidden_completion_script(hidden=False))
+    assert out["apiIssued"] is True
+    assert out["markerBefore"] is True
+    assert out["markerAfter"] is False, (
+        "an actively-viewed session must still clear its completion-unread marker "
+        "when the message load finishes"
+    )
+    assert out["viewed"] == 6, (
+        "an actively-viewed session must still sync its viewed count to the "
+        "loaded message count"
+    )
