@@ -2597,8 +2597,10 @@ def _assistant_content_part_is_tool_use(part) -> bool:
         return True
     if part_type:
         return False
-    return any(part.get(key) for key in ('tool_use_id', 'tool_call_id', 'call_id')) and bool(
-        part.get('name') or part.get('tool_name') or part.get('input') or part.get('args')
+    if _message_content_part_text(part).strip():
+        return False
+    return any(key in part for key in ('tool_use_id', 'tool_call_id', 'call_id')) and any(
+        key in part for key in ('name', 'tool_name', 'input', 'args')
     )
 
 
@@ -2612,8 +2614,12 @@ def _assistant_message_has_final_visible_text(message) -> bool:
         for idx, part in enumerate(content):
             if _assistant_content_part_is_tool_use(part):
                 last_tool_idx = idx
-        tail_parts = content[last_tool_idx + 1:] if last_tool_idx >= 0 else content
-        return bool(_message_text(tail_parts).strip())
+        if last_tool_idx >= 0:
+            tail_parts = content[last_tool_idx + 1:]
+            return bool(_message_text(tail_parts).strip())
+        if message.get('tool_calls'):
+            return False
+        return bool(_message_text(content).strip())
     if message.get('tool_calls'):
         return False
     return bool(_message_text(content).strip())
@@ -8794,7 +8800,8 @@ def _run_agent_streaming(
                 # the result/agent, use the captured message so the classifier can
                 # surface the real cause (model_not_found / auth) instead of the
                 # misleading no_response "silent rate limit, try again" fallback.
-                if not _last_err and _captured_terminal_error[0]:
+                _captured_terminal_failure = bool(_captured_terminal_error[0])
+                if not _last_err and _captured_terminal_failure:
                     _last_err = _captured_terminal_error[0]
                 _classification = _classify_provider_error(
                     str(_last_err) if _last_err else '',
@@ -8804,7 +8811,8 @@ def _run_agent_streaming(
                 _is_quota = _classification['type'] == 'quota_exhausted'
                 _is_auth = _classification['type'] == 'auth_mismatch'
                 _drop_replayed_assistant = (
-                    _agent_result_terminal_failure(result)
+                    _captured_terminal_failure
+                    or _agent_result_terminal_failure(result)
                     or bool(getattr(agent, '_last_error', None))
                     or ('error' in result and result.get('error') is not None)
                 )
@@ -8818,7 +8826,8 @@ def _run_agent_streaming(
                 )
                 _is_agent_result_terminal = _agent_result_terminal_failure(result)
                 _terminal_failure = (
-                    _is_agent_result_terminal
+                    _captured_terminal_failure
+                    or _is_agent_result_terminal
                     or (
                         _saved_transcript_lacks_final_answer
                         and _classification['type'] not in {'cancelled', 'interrupted'}

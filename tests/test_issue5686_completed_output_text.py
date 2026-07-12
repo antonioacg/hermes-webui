@@ -55,6 +55,43 @@ class TestIssue5686CompletedOutputText:
         ]
         assert streaming._session_lacks_final_assistant_answer(messages) is True
 
+    def test_session_lacks_final_answer_false_for_untyped_visible_text_with_call_metadata(self):
+        messages = list(PRIOR_DISPLAY) + [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"call_id": "call_1", "name": "weather.lookup", "text": "It is 18C and sunny."},
+                ],
+            },
+        ]
+        assert streaming._session_lacks_final_assistant_answer(messages) is False
+
+    def test_session_lacks_final_answer_true_for_untyped_tool_part_with_empty_args(self):
+        messages = list(PRIOR_DISPLAY) + [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"call_id": "call_1", "args": {}},
+                ],
+            },
+        ]
+        assert streaming._session_lacks_final_assistant_answer(messages) is True
+
+    def test_session_lacks_final_answer_true_for_top_level_tool_calls_without_in_content_boundary(self):
+        messages = list(PRIOR_DISPLAY) + [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Checking the tool result"},
+                ],
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "weather.lookup", "arguments": "{}"}}],
+            },
+        ]
+        assert streaming._session_lacks_final_assistant_answer(messages) is True
+
     def test_session_lacks_final_answer_false_for_plain_output_text_parts(self):
         messages = list(PRIOR_DISPLAY) + [
             {"role": "user", "content": "Summarize"},
