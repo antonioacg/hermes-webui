@@ -24808,7 +24808,7 @@ def _handle_handoff_summary(handler, body):
                 codex_kwargs = agent._build_api_kwargs(api_messages)
                 codex_kwargs.pop("tools", None)
                 codex_provider = str(getattr(agent, "provider", "") or "").strip().lower()
-                codex_base_url = str(getattr(agent, "base_url", "") or "").lower()
+                codex_base_url = str(getattr(agent, "base_url", "") or "").strip().lower()
                 is_chatgpt_codex = (
                     codex_provider == "openai-codex"
                     or (

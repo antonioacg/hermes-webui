@@ -504,20 +504,30 @@ def test_handoff_summary_retries_once_when_length_limit_reached(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("provider", "base_url", "expects_output_cap"),
+    ("provider", "base_url", "expects_output_cap", "expects_normalized_base_url"),
     [
-        ("openai-codex", "https://chatgpt.com/backend-api/codex", False),
-        ("custom:chatgpt-codex", "https://chatgpt.com/backend-api/codex", False),
-        ("custom:responses-proxy", "https://responses.example/v1", True),
+        ("openai-codex", "https://chatgpt.com/backend-api/codex", False, False),
+        ("custom:chatgpt-codex", "https://chatgpt.com/backend-api/codex", False, False),
+        ("custom:chatgpt-codex", "  https://chatgpt.com/backend-api/codex  ", False, True),
+        ("custom:responses-proxy", "https://responses.example/v1", True, False),
     ],
 )
 def test_handoff_summary_codex_output_cap_matches_provider_compatibility(
-    monkeypatch, provider, base_url, expects_output_cap,
+    monkeypatch, provider, base_url, expects_output_cap, expects_normalized_base_url,
 ):
     """ChatGPT Codex rejects the cap, while other Responses transports retain it."""
     import api.config as cfg
     import api.models as models
     import api.routes as routes
+
+    if expects_normalized_base_url:
+        real_urlsplit = routes.urlsplit
+
+        def _strict_urlsplit(value):
+            assert value == value.strip()
+            return real_urlsplit(value)
+
+        monkeypatch.setattr(routes, "urlsplit", _strict_urlsplit)
 
     monkeypatch.setattr(routes, "require", lambda body, *keys: None)
     monkeypatch.setattr(routes, "bad", lambda _handler, msg, status=400: {"ok": False, "error": msg, "status": status})
