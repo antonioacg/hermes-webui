@@ -819,13 +819,25 @@ def _active_stream_ids():
     return active_ids
 
 
-def _append_recovered_turn_to_context(session, recovered: dict) -> None:
-    context_messages = getattr(session, 'context_messages', None)
-    if not isinstance(context_messages, list) or not context_messages:
-        return
+def _recovered_model_context_projection(message: dict) -> dict | None:
+    if not isinstance(message, dict):
+        return None
+    projected = dict(message)
+    projected.pop('reasoning', None)
+    if projected.get('_error'):
+        return None
+    projected_text = _normalize_journal_recovery_text(projected.get('content'))
+    if not projected_text and not projected.get('tool_call_id') and not projected.get('tool_calls'):
+        return None
+    return projected
+
+
+def _append_recovered_context_projection(
+    session,
+    context_messages: list,
+    recovered: dict,
+) -> None:
     recovered_text = _normalize_journal_recovery_text(recovered.get('content'))
-    if not recovered_text and not recovered.get('tool_call_id') and not recovered.get('tool_calls'):
-        return
     if recovered_text:
         if recovered.get('role') == 'user':
             if _message_matches_pending_checkpoint(
@@ -843,6 +855,27 @@ def _append_recovered_turn_to_context(session, recovered: dict) -> None:
                 if _normalize_journal_recovery_text(existing.get('content')) == recovered_text:
                     return
     context_messages.append(dict(recovered))
+
+
+def _seed_recovered_context_from_messages(session, context_messages: list) -> None:
+    for message in getattr(session, 'messages', None) or []:
+        projected = _recovered_model_context_projection(message)
+        if projected is None:
+            continue
+        _append_recovered_context_projection(session, context_messages, projected)
+
+
+def _append_recovered_turn_to_context(session, recovered: dict) -> None:
+    context_messages = getattr(session, 'context_messages', None)
+    if not isinstance(context_messages, list):
+        context_messages = []
+        session.context_messages = context_messages
+    if not context_messages:
+        _seed_recovered_context_from_messages(session, context_messages)
+    projected = _recovered_model_context_projection(recovered)
+    if projected is None:
+        return
+    _append_recovered_context_projection(session, context_messages, projected)
 
 
 def _append_recovered_pending_turn(session, *, timestamp: int | None = None) -> dict | None:
@@ -2517,8 +2550,13 @@ def _append_journaled_partial_output(
             return False
 
         pending_text = _normalize_journal_recovery_text(session.pending_user_message)
-        owner_text = _normalize_journal_recovery_text(messages[owner_idx].get('content'))
-        if pending_text and owner_text != pending_text:
+        if pending_text and not _message_matches_pending_checkpoint(
+            messages[owner_idx],
+            session.pending_user_message,
+            session.pending_started_at,
+            session.pending_user_source,
+            session.pending_attachments,
+        ):
             return False
 
         for candidate_idx in range(existing_idx + 1, initial_message_count):
@@ -2526,8 +2564,17 @@ def _append_journaled_partial_output(
             if not isinstance(candidate, dict) or candidate.get('role') != 'user':
                 continue
             candidate_text = _normalize_journal_recovery_text(candidate.get('content'))
-            if pending_text and candidate.get('_recovered') and candidate_text == pending_text:
+            candidate_matches_checkpoint = pending_text and _message_matches_pending_checkpoint(
+                candidate,
+                session.pending_user_message,
+                session.pending_started_at,
+                session.pending_user_source,
+                session.pending_attachments,
+            )
+            if candidate_matches_checkpoint and candidate.get('_recovered'):
                 continue
+            if pending_text and candidate_text == pending_text:
+                return False
             return False
         return True
 

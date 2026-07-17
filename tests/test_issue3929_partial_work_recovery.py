@@ -12,6 +12,7 @@ from api.models import (
     _apply_core_sync_or_error_marker,
 )
 from api.run_journal import append_run_event
+import api.streaming as streaming
 from api.streaming import _sanitize_messages_for_api
 
 
@@ -276,25 +277,127 @@ def test_reasoning_backfill_does_not_claim_matching_content_from_prior_turn():
     )
 
 
+def test_repeated_pending_prompt_uses_checkpoint_owner_not_prior_same_text():
+    session_id = "issue3929_repeated_pending_prompt"
+    stream_id = "stream_repeated_pending_prompt"
+    repeated_text = "The same sufficiently long recovered answer appears."
+    prior_assistant = {"role": "assistant", "content": repeated_text}
+    pending_started_at = 2_000
+    session = Session(
+        session_id=session_id,
+        title="Repeated pending prompt",
+        messages=[
+            {"role": "user", "content": "Continue", "timestamp": 1_000},
+            prior_assistant,
+            {
+                "role": "user",
+                "content": "Continue",
+                "timestamp": pending_started_at,
+                "_recovered": True,
+            },
+        ],
+        context_messages=[
+            {"role": "user", "content": "Continue", "timestamp": 1_000},
+            {"role": "assistant", "content": repeated_text},
+            {
+                "role": "user",
+                "content": "Continue",
+                "timestamp": pending_started_at,
+                "_recovered": True,
+            },
+        ],
+        pending_user_message="Continue",
+        pending_started_at=pending_started_at,
+    )
+    append_run_event(
+        session_id,
+        stream_id,
+        "reasoning",
+        {"text": "This Thinking belongs to the second Continue turn."},
+    )
+    append_run_event(session_id, stream_id, "token", {"text": repeated_text})
+
+    assert _append_journaled_partial_output(
+        session, stream_id, dedupe_existing=True,
+    ) is True
+
+    assert prior_assistant.get("reasoning") is None
+    current_rows = [
+        message for message in session.messages[3:]
+        if message.get("content") == repeated_text
+    ]
+    assert len(current_rows) == 1
+    assert current_rows[0].get("reasoning") == (
+        "This Thinking belongs to the second Continue turn."
+    )
+    assert "second Continue turn" not in json.dumps(
+        session.context_messages, ensure_ascii=False,
+    )
+
+
+def test_empty_context_recovery_seeds_reasoning_free_model_context():
+    session_id = "issue3929_empty_context_reasoning"
+    stream_id = "stream_empty_context_reasoning"
+    session = Session(
+        session_id=session_id,
+        title="Empty context reasoning",
+        messages=[
+            {"role": "user", "content": "Continue", "timestamp": 1234},
+        ],
+        context_messages=[],
+    )
+    append_run_event(
+        session_id,
+        stream_id,
+        "reasoning",
+        {"text": "Display-only Thinking must not become model context."},
+    )
+
+    assert _append_journaled_partial_output(
+        session, stream_id, dedupe_existing=True,
+    ) is True
+
+    assert [message.get("content") for message in session.context_messages] == [
+        "Continue",
+    ]
+    serialized_context = json.dumps(
+        session.context_messages, ensure_ascii=False,
+    )
+    assert "Display-only Thinking" not in serialized_context
+    assert all("reasoning" not in message for message in session.context_messages)
+
+    next_turn_context = streaming._context_messages_for_new_turn(
+        session, "Now continue from there",
+    )
+    assert next_turn_context == session.context_messages
+
+
 def test_reasoning_backfill_accepts_core_row_before_recovered_owner_echo():
     session_id = "issue3929_reasoning_core_owner_echo"
     stream_id = "stream_reasoning_core_owner_echo"
     pending_text = "Current request"
+    pending_started_at = 3_000
     recovered_text = "The core transcript already contains this partial output."
     core_assistant = {"role": "assistant", "content": recovered_text}
     session = Session(
         session_id=session_id,
         title="Core owner echo",
         messages=[
-            {"role": "user", "content": pending_text},
+            {"role": "user", "content": pending_text, "timestamp": pending_started_at},
             core_assistant,
-            {"role": "user", "content": pending_text, "_recovered": True},
+            {
+                "role": "user",
+                "content": pending_text,
+                "timestamp": pending_started_at,
+                "_recovered": True,
+            },
         ],
         context_messages=[
-            {"role": "user", "content": pending_text},
+            {"role": "user", "content": pending_text, "timestamp": pending_started_at},
             {"role": "assistant", "content": recovered_text},
         ],
         pending_user_message=pending_text,
+        pending_started_at=pending_started_at,
     )
     append_run_event(
         session_id,
