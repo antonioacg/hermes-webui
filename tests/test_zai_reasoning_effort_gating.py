@@ -32,7 +32,7 @@ import api.config as cfg
 def test_glm_5_2_native_zai_keeps_full_ladder():
     efforts = cfg.resolve_model_reasoning_efforts("glm-5.2", provider_id="zai")
     # Z.AI's accepted values match VALID_REASONING_EFFORTS exactly.
-    assert set(efforts) == {"minimal", "low", "medium", "high", "xhigh", "max"}
+    assert set(efforts) == {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
 def test_glm_5_2_preserves_none_sentinel():
@@ -173,7 +173,7 @@ def test_glm_5_2_status_offers_effort_ladder_and_toggle():
     st = _reasoning_status("glm-5.2")
     assert st["supports_reasoning_effort"] is True
     assert set(st["supported_efforts"]) == {
-        "minimal", "low", "medium", "high", "xhigh", "max"
+        "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     }
     assert st["supports_thinking_toggle"] is True
 
@@ -237,7 +237,7 @@ def test_zai_aliases_resolve_through_same_gate(alias):
     efforts_5_1 = cfg.resolve_model_reasoning_efforts("glm-5.1", provider_id=alias)
     efforts_4_7 = cfg.resolve_model_reasoning_efforts("glm-4.7", provider_id=alias)
     assert set(efforts_5_2) == {
-        "minimal", "low", "medium", "high", "xhigh", "max"
+        "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     }
     assert efforts_5_1 == []
     assert efforts_4_7 == []
@@ -271,7 +271,7 @@ def test_non_glm_model_on_zai_provider_unaffected():
     # non-GLM models fall through unchanged. (The OpenAI-family ceiling does NOT
     # fire here because that branch is keyed on provider, not model family.)
     efforts = cfg.resolve_model_reasoning_efforts("gpt-5", provider_id="zai")
-    assert set(efforts) == {"minimal", "low", "medium", "high", "xhigh", "max"}
+    assert set(efforts) == {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
 # ── Coercion agrees with advertising (UI/coercion invariant) ─────────────────────

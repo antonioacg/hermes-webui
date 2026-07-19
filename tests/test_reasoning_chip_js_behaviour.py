@@ -10,7 +10,6 @@ label fell through to a wrong value for an unknown input.
 This file pins the actual rendered output for every effort state so the
 chip's None/Default visibility cannot silently regress.
 """
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -89,7 +88,9 @@ eval(extractFunc('_highlightReasoningOption'));
 eval(extractFunc('_applyReasoningChip'));
 
 const input = JSON.parse(process.argv[3]);
-_applyReasoningChip(input);
+// Rendering is independent of model-context ownership; supply a fixed key so
+// this focused harness does not need to recreate the entire session selector.
+_applyReasoningChip(input, null, 'test-profile\ntest-model');
 const result = {
   display: els.composerReasoningWrap.style.display,
   label:   els.composerReasoningLabel.textContent,
@@ -218,7 +219,8 @@ const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 
 function makeEl() {
-    return {
+  const children = [];
+  return {
     style: {},
     _attrs: {},
     setAttribute(k, v){this._attrs[k] = String(v)},
@@ -236,7 +238,8 @@ function makeEl() {
     dataset: {},
     title: '',
     textContent: '',
-    querySelectorAll(){return []},
+    appendChild(child){children.push(child); return child},
+    querySelectorAll(sel){return sel === '.reasoning-option' ? children : []},
   };
 }
 
@@ -279,7 +282,9 @@ eval(extractFunc('_applyReasoningOptions'));
 eval(extractFunc('_applyReasoningChip'));
 
 const input = JSON.parse(process.argv[3]);
-_applyReasoningChip(input.effort, input.meta);
+// Rendering is independent of model-context ownership; supply a fixed key so
+// this focused harness does not need to recreate the entire session selector.
+_applyReasoningChip(input.effort, input.meta, 'test-profile\\ntest-model');
 const result = {
   display: els.composerReasoningWrap.style.display,
   label:   els.composerReasoningLabel.textContent,
@@ -461,7 +466,9 @@ eval(extractFunc('_applyReasoningOptions'));
 eval(extractFunc('_applyReasoningChip'));
 
 const input = JSON.parse(process.argv[3]);
-_applyReasoningChip(input.effort, input.meta);
+// Rendering is independent of model-context ownership; supply a fixed key so
+// this focused harness does not need to recreate the entire session selector.
+_applyReasoningChip(input.effort, input.meta, 'test-profile\\ntest-model');
 const visible = optionEls
   .filter(o => o.style.display !== 'none')
   .map(o => o.dataset.effort === '' ? 'Default' : o.dataset.effort);
