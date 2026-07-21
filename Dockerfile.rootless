@@ -15,6 +15,10 @@
 # vehicle for upstream visibility/sync). Bump the FROM pin (Renovate) on upstream releases.
 FROM ghcr.io/nesquena/hermes-webui:0.50.43
 
+# Explicit: run the build-time remap as root (the base image's final USER isn't reliably
+# root across builds, and groupmod/usermod/chown need /etc/passwd + /etc/group writable).
+USER root
+
 # Replicate docker_init.bash's root block at build time: align hermeswebui to uid/gid 10000
 # (the pod's runAsUser + the NVMe PVC's fsGroup), pre-seed /app from /apptoo, and own every
 # runtime-writable path as hermeswebui so the non-root process can venv/pip/run without a
