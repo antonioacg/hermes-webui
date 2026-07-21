@@ -1,0 +1,33 @@
+# Rootless variant of nesquena/hermes-webui (INFRA-105).
+#
+# WHY: the upstream image's entrypoint (docker_init.bash) starts as ROOT to remap the
+# hermeswebui uid/gid to the operator's WANTED_UID and to pre-seed /chown runtime paths,
+# then drops privileges. Kubernetes restricted PSS forbids a root start (uid 0) — so the
+# stock image crashloops under restricted PSS (the init's usermod/chown need root).
+#
+# This Dockerfile bakes EXACTLY that root block at BUILD time (root here is the GitHub
+# Actions ubuntu runner, not the cluster), so the resulting image runs as a fixed non-root
+# uid (10000) and the runtime init's rootless path takes over (it verifies uid==WANTED_UID,
+# finds /app pre-seeded, and proceeds to its venv/server startup — root never executes at
+# runtime). Restricted-PSS + Kata both satisfied; no PSS relaxation anywhere.
+#
+# Builds FROM the upstream published image (zero drift — the fork's source is the tracking
+# vehicle for upstream visibility/sync). Bump the FROM pin (Renovate) on upstream releases.
+FROM ghcr.io/nesquena/hermes-webui:0.50.43
+
+# Replicate docker_init.bash's root block at build time: align hermeswebui to uid/gid 10000
+# (the pod's runAsUser + the NVMe PVC's fsGroup), pre-seed /app from /apptoo, and own every
+# runtime-writable path as hermeswebui so the non-root process can venv/pip/run without a
+# root chown. Mirrors `chown_home_hermeswebui` + the usermod/groupmod lines verbatim in intent.
+RUN groupmod -o -g 10000 hermeswebui \
+    && usermod -o -u 10000 -g 10000 hermeswebui \
+    && mkdir -p /app /uv_cache /workspace \
+    && (cp -a /apptoo/. /app/ 2>/dev/null || true) \
+    && chown -R hermeswebui:hermeswebui /home/hermeswebui /app /uv_cache /workspace \
+    && chmod 0755 /home/hermeswebui
+
+# Drop to the non-root runtime user. Set WANTED_UID=10000 + WANTED_GID=10000 in the pod env
+# so the runtime init's rootless uid-check passes (it errors if the running uid != WANTED_UID).
+USER 10000:10000
+
+# EXPOSE 8787 and CMD ["/hermeswebui_init.bash"] are inherited from the base image.
