@@ -80,6 +80,7 @@ WORKDIR /app
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ENV UV_PROJECT_ENVIRONMENT=/app/venv
+ENV VIRTUAL_ENV=/app/venv
 ENV PATH=/home/hermeswebui/.local/bin:${PATH}
 
 # Pre-build the venv at BUILD time so runtime boot is hermetic (no pypi coupling). Mirrors
