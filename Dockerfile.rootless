@@ -1,35 +1,48 @@
-# Rootless variant of nesquena/hermes-webui (INFRA-105).
+# Rootless, agent-bundled variant of nesquena/hermes-webui (INFRA-105).
 #
-# WHY: the upstream image's entrypoint (docker_init.bash) starts as ROOT to remap the
-# hermeswebui uid/gid to the operator's WANTED_UID and to pre-seed /chown runtime paths,
-# then drops privileges. Kubernetes restricted PSS forbids a root start (uid 0) — so the
+# WHY: the upstream image's entrypoint (docker_init.bash) starts as ROOT to remap
+# the hermeswebui uid/gid to WANTED_UID and to pre-seed /chown runtime paths, then
+# drops privileges. Kubernetes restricted PSS forbids a root start (uid 0) — so the
 # stock image crashloops under restricted PSS (the init's usermod/chown need root).
 #
-# This Dockerfile bakes EXACTLY that root block at BUILD time (root here is the GitHub
-# Actions ubuntu runner, not the cluster), so the resulting image runs as a fixed non-root
-# uid (10000) and the runtime init's rootless path takes over (it verifies uid==WANTED_UID,
-# finds /app pre-seeded, and proceeds to its venv/server startup — root never executes at
-# runtime). Restricted-PSS + Kata both satisfied; no PSS relaxation anywhere.
+# This Dockerfile bakes EXACTLY that root block at BUILD time (root here is the
+# GitHub Actions ubuntu runner, not the cluster), so the resulting image runs as a
+# fixed non-root uid (10000) and the runtime init's rootless path takes over (it
+# verifies uid==WANTED_UID, finds /app pre-seeded, and proceeds to server startup —
+# root never executes at runtime). Restricted-PSS + Kata both satisfied; no PSS
+# relaxation anywhere.
 #
-# Builds FROM the upstream published image (zero drift — the fork's source is the tracking
-# vehicle for upstream visibility/sync). Bump the FROM pin (Renovate) on upstream releases.
+# It ALSO bundles hermes-agent (the WebUI embeds the agent in-process and imports
+# run_agent off its source tree; hermes-agent is NOT a pip package, so the upstream
+# image ships without it — it expects a mounted volume in the two-container compose
+# layout). We bake the agent source + a pre-built venv into the image, so runtime
+# boot is hermetic: the runtime init finds .deps_installed and skips EVERY network
+# step (uv download, venv create, requirements install, agent install, hindsight
+# check) and goes straight to `python server.py`. No first-boot pypi coupling for a
+# single-replica service.
+#
+# Builds FROM the upstream published image. The fork's own source is the tracking
+# vehicle for upstream visibility; this Dockerfile is the real artifact. Bump the
+# FROM pin and HERMES_AGENT_VERSION (Renovate) on upstream releases.
 FROM ghcr.io/nesquena/hermes-webui:0.50.43
 
-# Replace the 0.50.43 init (docker_init.bash) — which uses `sudo` UNCONDITIONALLY for the
-# /app + uid setup (lines 168-212) and so cannot run under NoNewPrivs (restricted PSS) —
-# with master's rootless-friendly init. Master's version does the root work only
-# `if whoami==root`, else verifies uid==WANTED_UID and proceeds with no sudo. The init is a
-# generic launcher (venv + pip install + run server); master's works with 0.50.43's code.
+# Replace the 0.50.43 init (docker_init.bash) — which uses `sudo` UNCONDITIONALLY for
+# the /app + uid setup (lines 168-212) and so cannot run under NoNewPrivs (restricted
+# PSS) — with master's rootless-friendly init. Master's version does the root work
+# only `if whoami==root`, else verifies uid==WANTED_UID and proceeds with no sudo. The
+# init is a generic launcher (venv + pip install + run server); master's works with
+# 0.50.43's code.
 COPY --chmod=555 docker_init.bash /hermeswebui_init.bash
 
-# Explicit: run the build-time remap as root (the base image's final USER isn't reliably
-# root across builds, and groupmod/usermod/chown need /etc/passwd + /etc/group writable).
+# Explicit: run the build-time remap as root (the base image's final USER isn't
+# reliably root across builds, and groupmod/usermod/chown need /etc/passwd + /etc/group
+# writable).
 USER root
 
-# Replicate docker_init.bash's root block at build time: align hermeswebui to uid/gid 10000
-# (the pod's runAsUser + the NVMe PVC's fsGroup), pre-seed /app from /apptoo, and own every
-# runtime-writable path as hermeswebui so the non-root process can venv/pip/run without a
-# root chown. Mirrors `chown_home_hermeswebui` + the usermod/groupmod lines verbatim in intent.
+# Replicate docker_init.bash's root block at build time: align hermeswebui to uid/gid
+# 10000 (the pod's runAsUser + the NVMe PVC's fsGroup), pre-seed /app from /apptoo, and
+# own every runtime-writable path as hermeswebui so the non-root process can venv/pip/run
+# without a root chown. Mirrors `chown_home_hermeswebui` + the usermod/groupmod lines.
 RUN groupmod -o -g 10000 hermeswebui \
     && usermod -o -u 10000 -g 10000 hermeswebui \
     && mkdir -p /app /uv_cache /workspace \
@@ -37,8 +50,51 @@ RUN groupmod -o -g 10000 hermeswebui \
     && chown -R hermeswebui:hermeswebui /home/hermeswebui /app /uv_cache /workspace \
     && chmod 0755 /home/hermeswebui
 
-# Drop to the non-root runtime user. Set WANTED_UID=10000 + WANTED_GID=10000 in the pod env
-# so the runtime init's rootless uid-check passes (it errors if the running uid != WANTED_UID).
+# Bundle hermes-agent source. The path is the ONE both consumers agree on:
+# docker_init.bash's _agent_paths[0] AND config.py's _discover_agent_dir() candidate
+# (~/.hermes/hermes-agent, since hermeswebui HOME is /home/hermeswebui). The deployment
+# also sets HERMES_WEBUI_AGENT_DIR to this path (config.py priority-1 override) so
+# resolution never depends on HOME being set in the pod. Fetched as a release-tag tarball
+# (no git needed in the image, no .git metadata); pinned to a tag for supply-chain hygiene
+# (the agent itself exact-pins every dep for the same reason). Done as root so it can chown
+# to hermeswebui before the build-time pip install writes egg-info next to the package.
+ARG HERMES_AGENT_VERSION=v2026.7.20
+RUN mkdir -p /home/hermeswebui/.hermes \
+    && curl -fsSL -o /tmp/agent.tar.gz \
+        "https://github.com/NousResearch/hermes-agent/archive/refs/tags/${HERMES_AGENT_VERSION}.tar.gz" \
+    && tar -xzf /tmp/agent.tar.gz -C /home/hermeswebui/.hermes \
+    && mv /home/hermeswebui/.hermes/hermes-agent-* /home/hermeswebui/.hermes/hermes-agent \
+    && rm /tmp/agent.tar.gz \
+    && chown -R hermeswebui:hermeswebui /home/hermeswebui/.hermes
+
+# Drop to the non-root runtime user. Set WANTED_UID=10000 + WANTED_GID=10000 in the pod
+# env so the runtime init's rootless uid-check passes (it errors if running uid != WANTED_UID).
 USER 10000:10000
+
+WORKDIR /app
+
+# Install uv via the same installer the runtime init uses; lands in ~/.local/bin. The PATH
+# ENV below persists to the runtime image so the init's `command -v uv` finds it and skips
+# its download step (the uv installer only writes shell rc, which a non-interactive
+# container never sources).
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+ENV UV_PROJECT_ENVIRONMENT=/app/venv
+ENV PATH=/home/hermeswebui/.local/bin:${PATH}
+
+# Pre-build the venv at BUILD time so runtime boot is hermetic (no pypi coupling). Mirrors
+# docker_init.bash's setup verbatim in intent: venv → WebUI requirements → pip/setuptools
+# upgrade → agent [all] → hindsight-client (the init's ensure_hindsight_client_docker_dependency
+# checks for it outside the .deps_installed guard). The .deps_installed sentinel then makes
+# the runtime init skip its entire install block and start the server directly. The agent
+# source is writable in the image, so install it directly — no need for the init's :ro-mount
+# staging. [all] is deliberately light (heavy ML/voice/matrix extras are lazy-installed at
+# first use), so this is a bounded pure-Python wheel install.
+RUN uv venv /app/venv \
+    && uv pip install -r requirements.txt --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    && uv pip install -U pip setuptools --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    && uv pip install /home/hermeswebui/.hermes/hermes-agent[all] --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    && uv pip install "hindsight-client>=0.4.22" --trusted-host pypi.org --trusted-host files.pythonhosted.org \
+    && touch /app/venv/.deps_installed
 
 # EXPOSE 8787 and CMD ["/hermeswebui_init.bash"] are inherited from the base image.
