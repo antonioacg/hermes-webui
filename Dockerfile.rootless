@@ -15,6 +15,13 @@
 # vehicle for upstream visibility/sync). Bump the FROM pin (Renovate) on upstream releases.
 FROM ghcr.io/nesquena/hermes-webui:0.50.43
 
+# Replace the 0.50.43 init (docker_init.bash) — which uses `sudo` UNCONDITIONALLY for the
+# /app + uid setup (lines 168-212) and so cannot run under NoNewPrivs (restricted PSS) —
+# with master's rootless-friendly init. Master's version does the root work only
+# `if whoami==root`, else verifies uid==WANTED_UID and proceeds with no sudo. The init is a
+# generic launcher (venv + pip install + run server); master's works with 0.50.43's code.
+COPY --chmod=555 docker_init.bash /hermeswebui_init.bash
+
 # Explicit: run the build-time remap as root (the base image's final USER isn't reliably
 # root across builds, and groupmod/usermod/chown need /etc/passwd + /etc/group writable).
 USER root
